@@ -36,45 +36,88 @@ func (h *GitHubWebhooksHandler) Receive() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Handle CORS preflight requests
 		if c.Method() == "OPTIONS" {
+			slog.Info("GitHub webhook OPTIONS preflight request",
+				"path", c.Path(),
+				"remote_ip", c.IP(),
+			)
 			return c.SendStatus(fiber.StatusOK)
 		}
 
-		// Log all webhook requests immediately (before any checks)
-		slog.Info("GitHub webhook endpoint hit",
+		// Capture all request details for detailed logging
+		body := c.Body()
+		bodySize := len(body)
+		delivery := strings.TrimSpace(c.Get("X-GitHub-Delivery"))
+		event := strings.TrimSpace(c.Get("X-GitHub-Event"))
+		sig := strings.TrimSpace(c.Get("X-Hub-Signature-256"))
+		sigSha1 := strings.TrimSpace(c.Get("X-Hub-Signature"))
+		hookID := strings.TrimSpace(c.Get("X-GitHub-Hook-ID"))
+		hookInstallationTargetID := strings.TrimSpace(c.Get("X-GitHub-Hook-Installation-Target-ID"))
+		hookInstallationTargetType := strings.TrimSpace(c.Get("X-GitHub-Hook-Installation-Target-Type"))
+
+		// Detailed logging of incoming webhook request
+		slog.Info("=== GitHub Webhook POST Request Received ===",
 			"method", c.Method(),
 			"path", c.Path(),
 			"original_url", c.OriginalURL(),
 			"remote_ip", c.IP(),
 			"user_agent", c.Get("User-Agent"),
+			"content_type", c.Get("Content-Type"),
+			"content_length", c.Get("Content-Length"),
+			"body_size_bytes", bodySize,
+			"x_github_delivery", delivery,
+			"x_github_event", event,
+			"x_github_hook_id", hookID,
+			"x_github_hook_installation_target_id", hookInstallationTargetID,
+			"x_github_hook_installation_target_type", hookInstallationTargetType,
+			"x_hub_signature_256_present", sig != "",
+			"x_hub_signature_present", sigSha1 != "",
+			"accept_header", c.Get("Accept"),
+		)
+
+		// Log first 500 chars of body for debugging (truncate if too long)
+		bodyPreview := string(body)
+		if len(bodyPreview) > 500 {
+			bodyPreview = bodyPreview[:500] + "... (truncated)"
+		}
+		slog.Info("GitHub webhook request body preview",
+			"delivery_id", delivery,
+			"body_preview", bodyPreview,
+			"body_size", bodySize,
 		)
 
 		if h.cfg.GitHubWebhookSecret == "" {
-			slog.Error("webhook secret not configured")
+			slog.Error("GitHub webhook secret not configured - rejecting request",
+				"delivery_id", delivery,
+				"event", event,
+			)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "webhook_secret_not_configured"})
 		}
 
-		delivery := strings.TrimSpace(c.Get("X-GitHub-Delivery"))
-		event := strings.TrimSpace(c.Get("X-GitHub-Event"))
-		sig := strings.TrimSpace(c.Get("X-Hub-Signature-256"))
-
-		// Log webhook reception for debugging
-		slog.Info("GitHub webhook received",
-			"event", event,
+		slog.Info("GitHub webhook secret configured, proceeding with signature verification",
 			"delivery_id", delivery,
-			"path", c.Path(),
-			"method", c.Method(),
+			"event", event,
 		)
 
-		body := c.Body()
-
 		if !verifyGitHubSignature(h.cfg.GitHubWebhookSecret, body, sig) {
-			slog.Warn("GitHub webhook signature verification failed",
+			slog.Warn("GitHub webhook signature verification FAILED",
 				"delivery_id", delivery,
 				"event", event,
-				"has_signature", sig != "",
+				"has_signature_256", sig != "",
+				"signature_256_preview", func() string {
+					if len(sig) > 20 {
+						return sig[:20] + "..."
+					}
+					return sig
+				}(),
+				"body_size", bodySize,
 			)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid_signature"})
 		}
+
+		slog.Info("GitHub webhook signature verification SUCCESS",
+			"delivery_id", delivery,
+			"event", event,
+		)
 
 		var repoFullName string
 		var action string
@@ -95,19 +138,77 @@ func (h *GitHubWebhooksHandler) Receive() fiber.Handler {
 			Payload:      body,
 		}
 
+		slog.Info("GitHub webhook event parsed",
+			"delivery_id", delivery,
+			"event", event,
+			"action", action,
+			"repo_full_name", repoFullName,
+		)
+
 		// Preferred path: publish to NATS and return immediately (no heavy work in request path).
 		if h.bus != nil {
-			b, _ := json.Marshal(ev)
-			_ = h.bus.Publish(c.Context(), events.SubjectGitHubWebhookReceived, b)
+			slog.Info("Publishing GitHub webhook to NATS event bus",
+				"delivery_id", delivery,
+				"event", event,
+				"subject", events.SubjectGitHubWebhookReceived,
+			)
+			b, err := json.Marshal(ev)
+			if err != nil {
+				slog.Error("Failed to marshal webhook event for NATS",
+					"delivery_id", delivery,
+					"error", err,
+				)
+			} else {
+				if pubErr := h.bus.Publish(c.Context(), events.SubjectGitHubWebhookReceived, b); pubErr != nil {
+					slog.Error("Failed to publish webhook event to NATS",
+						"delivery_id", delivery,
+						"error", pubErr,
+					)
+				} else {
+					slog.Info("Successfully published GitHub webhook to NATS",
+						"delivery_id", delivery,
+						"event", event,
+					)
+				}
+			}
+			slog.Info("=== GitHub Webhook Request Completed (NATS) ===",
+				"delivery_id", delivery,
+				"event", event,
+				"status", "200 OK",
+			)
 			return c.SendStatus(fiber.StatusOK)
 		}
 
 		// Fallback path (no NATS): ingest inline (still no external calls).
 		if h.ing != nil {
-			_ = h.ing.Ingest(c.Context(), ev)
+			slog.Info("Processing GitHub webhook inline (no NATS configured)",
+				"delivery_id", delivery,
+				"event", event,
+			)
+			if err := h.ing.Ingest(c.Context(), ev); err != nil {
+				slog.Error("Failed to ingest GitHub webhook",
+					"delivery_id", delivery,
+					"event", event,
+					"error", err,
+				)
+			} else {
+				slog.Info("Successfully ingested GitHub webhook",
+					"delivery_id", delivery,
+					"event", event,
+				)
+			}
+		} else {
+			slog.Warn("No webhook ingestor configured - webhook received but not processed",
+				"delivery_id", delivery,
+				"event", event,
+			)
 		}
 
-		// ACK fast.
+		slog.Info("=== GitHub Webhook Request Completed (Inline) ===",
+			"delivery_id", delivery,
+			"event", event,
+			"status", "200 OK",
+		)
 		return c.SendStatus(fiber.StatusOK)
 	}
 }
