@@ -873,6 +873,21 @@ WHERE u.id = $1
 		if website != nil && *website != "" {
 			response["website"] = *website
 		}
+		if telegram != nil && *telegram != "" {
+			response["telegram"] = *telegram
+		}
+		if linkedin != nil && *linkedin != "" {
+			response["linkedin"] = *linkedin
+		}
+		if whatsapp != nil && *whatsapp != "" {
+			response["whatsapp"] = *whatsapp
+		}
+		if twitter != nil && *twitter != "" {
+			response["twitter"] = *twitter
+		}
+		if discord != nil && *discord != "" {
+			response["discord"] = *discord
+		}
 
 		return c.Status(fiber.StatusOK).JSON(response)
 	}
