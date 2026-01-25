@@ -42,6 +42,7 @@ pub enum DataKey {
     Admin,
     Token,
     Escrow(u64), // bounty_id
+    ReentrancyGuard,
 }
 
 #[contract]
@@ -78,6 +79,11 @@ impl BountyEscrowContract {
         deadline: u64,
     ) -> Result<(), Error> {
         depositor.require_auth();
+
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            panic!("Reentrancy detected");
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -122,12 +128,19 @@ impl BountyEscrowContract {
             },
         );
 
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
+
         Ok(())
     }
 
     /// Release funds to the contributor.
     /// Only the admin (backend) can authorize this.
     pub fn release_funds(env: Env, bounty_id: u64, contributor: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            panic!("Reentrancy detected");
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
         }
@@ -164,12 +177,18 @@ impl BountyEscrowContract {
             },
         );
 
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         Ok(())
     }
 
     /// Refund funds to the original depositor if the deadline has passed.
     pub fn refund(env: Env, bounty_id: u64) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            panic!("Reentrancy detected");
+        }
+        env.storage().instance().set(&DataKey::ReentrancyGuard, &true);
+
         // We'll allow anyone to trigger the refund if conditions are met, 
         // effectively making it permissionless but conditional.
         // OR we can require depositor auth. Let's make it permissionless to ensure funds aren't stuck if depositor key is lost,
@@ -209,6 +228,8 @@ impl BountyEscrowContract {
                 timestamp: env.ledger().timestamp()
             },
         );
+
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         Ok(())
     }
