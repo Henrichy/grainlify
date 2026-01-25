@@ -1,4 +1,3 @@
-
 //! # Bounty Escrow Smart Contract
 //!
 //! A trustless escrow system for bounty payments on the Stellar blockchain.
@@ -100,22 +99,22 @@ use events::{BountyEscrowInitialized, FundsLocked, FundsReleased, FundsRefunded,
 pub enum Error {
     /// Returned when attempting to initialize an already initialized contract
     AlreadyInitialized = 1,
-    
+
     /// Returned when calling contract functions before initialization
     NotInitialized = 2,
-    
+
     /// Returned when attempting to lock funds with a duplicate bounty ID
     BountyExists = 3,
-    
+
     /// Returned when querying or operating on a non-existent bounty
     BountyNotFound = 4,
-    
+
     /// Returned when attempting operations on non-LOCKED funds
     FundsNotLocked = 5,
-    
+
     /// Returned when attempting refund before the deadline has passed
     DeadlineNotPassed = 6,
-    
+
     /// Returned when caller lacks required authorization for the operation
     Unauthorized = 7,
     InvalidAmount = 8,
@@ -244,7 +243,7 @@ impl BountyEscrowContract {
     // ========================================================================
     // Initialization
     // ========================================================================
-    
+
     /// Initializes the Bounty Escrow contract with admin and token addresses.
     ///
     /// # Arguments
@@ -280,11 +279,15 @@ impl BountyEscrowContract {
     /// # Gas Cost
     /// Low - Only two storage writes
     pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
+        let start = env.ledger().timestamp();
+        let caller = admin.clone();
+
         // Prevent re-initialization
         if env.storage().instance().has(&DataKey::Admin) {
+            monitoring::track_operation(&env, symbol_short!("init"), caller, false);
             return Err(Error::AlreadyInitialized);
         }
-        
+
         // Store configuration
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
@@ -293,11 +296,18 @@ impl BountyEscrowContract {
         emit_bounty_initialized(
             &env,
             BountyEscrowInitialized {
-                admin,
+                admin: admin.clone(),
                 token,
-                timestamp: env.ledger().timestamp()
+                timestamp: env.ledger().timestamp(),
             },
         );
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("init"), caller, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("init"), duration);
 
         Ok(())
     }
@@ -344,7 +354,7 @@ impl BountyEscrowContract {
     /// let depositor = Address::from_string("GDEPOSIT...");
     /// let amount = 1000_0000000; // 1000 USDC
     /// let deadline = env.ledger().timestamp() + (30 * 24 * 60 * 60); // 30 days
-    /// 
+    ///
     /// escrow_client.lock_funds(&depositor, &42, &amount, &deadline)?;
     /// // Funds are now locked and can be released or refunded
     /// ```
@@ -363,16 +373,41 @@ impl BountyEscrowContract {
         amount: i128,
         deadline: u64,
     ) -> Result<(), Error> {
+        let start = env.ledger().timestamp();
+        let caller = depositor.clone();
+
         // Verify depositor authorization
         depositor.require_auth();
 
         // Ensure contract is initialized
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            panic!("Reentrancy detected");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
+
+        if amount <= 0 {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+            return Err(Error::InvalidAmount);
+        }
+
+        if deadline <= env.ledger().timestamp() {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
+            return Err(Error::InvalidDeadline);
+        }
         if !env.storage().instance().has(&DataKey::Admin) {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::NotInitialized);
         }
 
         // Prevent duplicate bounty IDs
         if env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller, false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyExists);
         }
 
@@ -394,8 +429,10 @@ impl BountyEscrowContract {
         };
 
         // Store in persistent storage with extended TTL
-        env.storage().persistent().set(&DataKey::Escrow(bounty_id), &escrow);
-        
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
         // Emit event for off-chain indexing
         emit_funds_locked(
             &env,
@@ -403,9 +440,18 @@ impl BountyEscrowContract {
                 bounty_id,
                 amount,
                 depositor: depositor.clone(),
-                deadline
+                deadline,
             },
         );
+
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("lock"), caller, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("lock"), duration);
 
         Ok(())
     }
@@ -447,7 +493,7 @@ impl BountyEscrowContract {
     /// ```rust
     /// // After verifying task completion off-chain:
     /// let contributor = Address::from_string("GCONTRIB...");
-    /// 
+    ///
     /// // Admin calls release
     /// escrow_client.release_funds(&42, &contributor)?;
     /// // Funds transferred to contributor, escrow marked as Released
@@ -463,8 +509,17 @@ impl BountyEscrowContract {
     /// 4. Monitor release events for anomalies
     /// 5. Consider implementing release delays for high-value bounties
     pub fn release_funds(env: Env, bounty_id: u64, contributor: Address) -> Result<(), Error> {
+        let start = env.ledger().timestamp();
+
         // Ensure contract is initialized
+        if env.storage().instance().has(&DataKey::ReentrancyGuard) {
+            panic!("Reentrancy detected");
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ReentrancyGuard, &true);
         if !env.storage().instance().has(&DataKey::Admin) {
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::NotInitialized);
         }
 
@@ -474,24 +529,38 @@ impl BountyEscrowContract {
 
         // Verify bounty exists
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyNotFound);
         }
 
         // Get and verify escrow state
-        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(bounty_id)).unwrap();
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
 
         if escrow.status != EscrowStatus::Locked {
+            monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::FundsNotLocked);
         }
 
         // Transfer funds to contributor
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
-        client.transfer(&env.current_contract_address(), &contributor, &escrow.amount);
-
-        // Update escrow status
         escrow.status = EscrowStatus::Released;
-        env.storage().persistent().set(&DataKey::Escrow(bounty_id), &escrow);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        // Transfer funds to contributor
+        client.transfer(
+            &env.current_contract_address(),
+            &contributor,
+            &escrow.amount,
+        );
 
         // Emit release event
         emit_funds_released(
@@ -500,10 +569,18 @@ impl BountyEscrowContract {
                 bounty_id,
                 amount: escrow.amount,
                 recipient: contributor.clone(),
-                timestamp: env.ledger().timestamp()
+                timestamp: env.ledger().timestamp(),
             },
         );
 
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("release"), admin, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("release"), duration);
         Ok(())
     }
 
@@ -563,11 +640,19 @@ impl BountyEscrowContract {
         mode: RefundMode,
     ) -> Result<(), Error> {
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            let caller = env.current_contract_address();
+            monitoring::track_operation(&env, symbol_short!("refund"), caller, false);
+            env.storage().instance().remove(&DataKey::ReentrancyGuard);
             return Err(Error::BountyNotFound);
         }
 
         // Get and verify escrow state
-        let mut escrow: Escrow = env.storage().persistent().get(&DataKey::Escrow(bounty_id)).unwrap();
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        let caller = escrow.depositor.clone();
 
         if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyRefunded {
             return Err(Error::FundsNotLocked);
@@ -675,6 +760,15 @@ impl BountyEscrowContract {
             },
         );
 
+        env.storage().instance().remove(&DataKey::ReentrancyGuard);
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("refund"), caller, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("refund"), duration);
+
         Ok(())
     }
 
@@ -706,7 +800,11 @@ impl BountyEscrowContract {
         if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             return Err(Error::BountyNotFound);
         }
-        Ok(env.storage().persistent().get(&DataKey::Escrow(bounty_id)).unwrap())
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap())
     }
 
     /// Returns the current token balance held by the contract.

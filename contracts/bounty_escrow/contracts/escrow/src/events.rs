@@ -1,4 +1,3 @@
-
 //! # Bounty Escrow Events Module
 //!
 //! This module defines all events emitted by the Bounty Escrow contract.
@@ -75,7 +74,7 @@ pub struct BountyEscrowInitialized {
 /// Topic: `(symbol_short!("init"),)`
 /// Data: Complete `BountyEscrowInitialized` struct
 pub fn emit_bounty_initialized(env: &Env, event: BountyEscrowInitialized) {
-    let topics = (symbol_short!("init"), );
+    let topics = (symbol_short!("init"),);
     env.events().publish(topics, event.clone());
 }
 
