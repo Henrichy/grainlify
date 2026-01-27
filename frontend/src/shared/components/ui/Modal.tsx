@@ -266,7 +266,7 @@ export function ModalSelect({
   const isDark = theme === 'dark';
 
   return (
-    <div className={`flex flex-col gap-1 relative ${className}`} ref={containerRef}>
+    <div className={`flex flex-col gap-1 relative ${className}`}>
       {label && (
         <label className={`block text-[13px] font-medium mb-2 transition-colors ${
           isDark ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
