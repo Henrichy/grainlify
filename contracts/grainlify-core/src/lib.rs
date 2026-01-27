@@ -776,6 +776,45 @@ impl GrainlifyContract {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Returns the semantic version string (e.g., "1.0.0").
+    /// Falls back to mapping known numeric values to semantic strings.
+    pub fn get_version_semver_string(env: Env) -> String {
+        let raw: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(0);
+        let s = match raw {
+            0 => "0.0.0",
+            1 | 10000 => "1.0.0",
+            2 | 20000 => "2.0.0",
+            10100 => "1.1.0",
+            10001 => "1.0.1",
+            _ => "unknown",
+        };
+        String::from_str(&env, s)
+    }
+
+    /// Returns the numeric encoded semantic version using policy major*10_000 + minor*100 + patch.
+    /// If the stored version is a simple major number (1,2,3...), it will be converted to major*10_000.
+    pub fn get_version_numeric_encoded(env: Env) -> u32 {
+        let raw: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Version)
+            .unwrap_or(0);
+        if raw >= 10_000 { raw } else { raw.saturating_mul(10_000) }
+    }
+
+    /// Ensures the current version meets a minimum required encoded semantic version.
+    /// Panics if current version is lower than `min_numeric`.
+    pub fn require_min_version(env: Env, min_numeric: u32) {
+        let cur = Self::get_version_numeric_encoded(env.clone());
+        if cur < min_numeric {
+            panic!("Incompatible contract version");
+        }
+    }
+
 
     /// Updates the contract version number.
     ///
