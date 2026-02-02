@@ -709,6 +709,7 @@ export const getMyProjects = () =>
       language: string;
       tags: string[];
       category: string;
+      description?: string | null;
       verification_error: string | null;
       verified_at: string | null;
       webhook_created_at: string | null;

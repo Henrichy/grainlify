@@ -22,6 +22,7 @@ interface Project {
   language: string | null;
   tags: string[];
   category: string | null;
+  description?: string | null;
   needs_metadata?: boolean;
 }
 
@@ -33,6 +34,11 @@ interface GroupedRepository {
     fullName: string;
     status: string;
     needs_metadata?: boolean;
+    description?: string | null;
+    ecosystem_name?: string | null;
+    language?: string | null;
+    tags?: string[];
+    category?: string | null;
   }>;
 }
 
@@ -54,6 +60,8 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
   const [showNewProjectModalFromRedirect, setShowNewProjectModalFromRedirect] = useState(false);
   /** True when user clicked "Complete setup" in repo dropdown to open the modal. */
   const [userOpenedModalForSetup, setUserOpenedModalForSetup] = useState(false);
+  /** Project opened for editing metadata (completed-setup repos). */
+  const [editingProject, setEditingProject] = useState<PendingSetupProject | null>(null);
 
   useEffect(() => {
   if (projects && projects.length > 0) {
@@ -165,6 +173,11 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
         fullName: project.github_full_name,
         status: project.status,
         needs_metadata: project.needs_metadata,
+        description: project.description,
+        ecosystem_name: project.ecosystem_name,
+        language: project.language,
+        tags: project.tags,
+        category: project.category,
       });
     });
 
@@ -213,21 +226,45 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
   };
 
   const currentPendingProject = pendingSetupProjects[0] ?? null;
-  // Only auto-show modal after GitHub App install redirect, or when user clicked "Complete setup"
-  const isNewProjectSetupOpen =
-    currentPendingProject !== null && (showNewProjectModalFromRedirect || userOpenedModalForSetup);
+  // Show modal: after GitHub App redirect / Complete setup click, or when editing a completed project
+  const isSetupModalOpen =
+    (currentPendingProject !== null && (showNewProjectModalFromRedirect || userOpenedModalForSetup)) ||
+    editingProject !== null;
+  // When user clicked Edit, show that project; otherwise show pending setup project
+  const setupModalProject = editingProject ?? currentPendingProject;
 
   const handleNewProjectSetupSuccess = () => {
     setShowNewProjectModalFromRedirect(false);
     setUserOpenedModalForSetup(false);
+    if (editingProject) {
+      setEditingProject(null);
+    } else {
+      setPendingSetupProjects((prev) => prev.slice(1));
+    }
     loadProjects();
-    setPendingSetupProjects((prev) => prev.slice(1));
   };
 
   const handleNewProjectSetupClose = () => {
     setShowNewProjectModalFromRedirect(false);
     setUserOpenedModalForSetup(false);
-    setPendingSetupProjects((prev) => prev.slice(1));
+    if (editingProject) {
+      setEditingProject(null);
+    } else {
+      setPendingSetupProjects((prev) => prev.slice(1));
+    }
+  };
+
+  const openEditModal = (repo: GroupedRepository['repos'][0]) => {
+    setEditingProject({
+      id: repo.id,
+      github_full_name: repo.fullName,
+      description: repo.description ?? null,
+      ecosystem_id: '',
+      ecosystem_name: repo.ecosystem_name ?? '',
+      language: repo.language ?? null,
+      tags: repo.tags ?? [],
+      category: repo.category ?? null,
+    });
   };
 
   const openSetupForProject = async (projectId: string) => {
@@ -254,7 +291,8 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
           {/* Repository Selector */}
           <div className="relative z-50">
             <button
-              className={`flex items-center gap-3 px-5 py-3 rounded-[14px] backdrop-blur-[30px] border transition-all group ${theme === 'dark'
+              type="button"
+              className={`flex items-center gap-3 px-5 py-3 rounded-[14px] backdrop-blur-[30px] border transition-all group cursor-pointer ${theme === 'dark'
                 ? 'bg-white/[0.08] border-white/20 hover:bg-white/[0.12] hover:border-[#c9983a]/40'
                 : 'bg-white/[0.15] border-white/30 hover:bg-white/[0.2] hover:border-[#c9983a]/30'
                 }`}
@@ -273,18 +311,18 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                 : 'bg-[#d4c5b0] border-white/40'
                 }`}>
                 {/* Header */}
-                <div className={`px-6 py-5 border-b-2 bg-gradient-to-b from-white/10 to-transparent transition-colors ${theme === 'dark' ? 'border-white/20' : 'border-white/30'
+                <div className={`px-5 py-3 border-b-2 bg-gradient-to-b from-white/10 to-transparent transition-colors ${theme === 'dark' ? 'border-white/20' : 'border-white/30'
                   }`}>
-                  <h3 className={`text-[17px] font-bold transition-colors ${theme === 'dark' ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
+                  <h3 className={`text-[16px] font-bold transition-colors ${theme === 'dark' ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
                     }`}>Select repositories</h3>
                 </div>
 
                 {/* Repository List */}
-                <div className="py-3 max-h-[420px] overflow-y-auto">
+                <div className="py-2 max-h-[280px] overflow-y-auto">
                   {isLoading ? (
-                    <div className="px-6 space-y-2">
-                      {[...Array(5)].map((_, idx) => (
-                        <div key={idx} className="flex items-center gap-3 py-3">
+                    <div className="px-5 space-y-1.5">
+                      {[...Array(4)].map((_, idx) => (
+                        <div key={idx} className="flex items-center gap-3 py-2.5">
                           <SkeletonLoader variant="circle" className="w-5 h-5 flex-shrink-0" />
                           <SkeletonLoader className="h-4 w-32" />
                           <SkeletonLoader className="h-4 w-20 ml-auto" />
@@ -292,7 +330,7 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                       ))}
                     </div>
                   ) : error ? (
-                    <div className={`flex items-center gap-3 px-6 py-4 mx-4 rounded-[12px] ${theme === 'dark'
+                    <div className={`flex items-center gap-3 px-5 py-3 mx-3 rounded-[12px] ${theme === 'dark'
                       ? 'bg-red-500/10 border border-red-500/30 text-red-400'
                       : 'bg-red-100 border border-red-300 text-red-700'
                       }`}>
@@ -300,7 +338,7 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                       <span className="text-[14px] font-medium">{error}</span>
                     </div>
                   ) : groupedRepositories.length === 0 ? (
-                    <div className={`px-6 py-8 text-center ${theme === 'dark' ? 'text-[#b8a898]' : 'text-[#7a6b5a]'
+                    <div className={`px-5 py-5 text-center ${theme === 'dark' ? 'text-[#b8a898]' : 'text-[#7a6b5a]'
                       }`}>
                       <p className="text-[14px] font-medium mb-1">No repositories found</p>
                       <p className="text-[12px]">Add your first repository to get started</p>
@@ -313,7 +351,8 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                         <div key={group.org}>
                           {/* Organization/Project */}
                           <button
-                            className={`w-full px-6 py-3.5 flex items-center justify-between transition-all group/repo ${theme === 'dark'
+                            type="button"
+                            className={`w-full px-5 py-2.5 flex items-center justify-between transition-all group/repo cursor-pointer ${theme === 'dark'
                               ? 'hover:bg-[#4a3e30]'
                               : 'hover:bg-[#c9b8a0]'
                               }`}
@@ -341,12 +380,12 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
 
                           {/* Sub-repositories (if expanded) */}
                           {group.repos.length > 0 && isExpanded && (
-                            <div className={`py-2 space-y-1 transition-colors ${theme === 'dark' ? 'bg-[#2d2820]/30' : 'bg-[#c9b8a0]/30'
+                            <div className={`py-1.5 space-y-0.5 transition-colors ${theme === 'dark' ? 'bg-[#2d2820]/30' : 'bg-[#c9b8a0]/30'
                               }`}>
                               {group.repos.map((repo) => (
                                 <label
                                   key={repo.id}
-                                  className={`flex items-center gap-3 px-6 py-2.5 rounded-[10px] mx-4 cursor-pointer group/subrepo transition-all ${theme === 'dark'
+                                  className={`flex items-center gap-3 px-5 py-2 rounded-[10px] mx-3 cursor-pointer group/subrepo transition-all ${theme === 'dark'
                                     ? 'hover:bg-[#4a3e30]'
                                     : 'hover:bg-[#c9b8a0]'
                                     }`}
@@ -394,12 +433,24 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                                       <button
                                         type="button"
                                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); openSetupForProject(repo.id); }}
-                                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 ${theme === 'dark'
+                                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 cursor-pointer ${theme === 'dark'
                                           ? 'bg-[#c9983a]/20 text-[#e8c77f] border border-[#c9983a]/40 hover:bg-[#c9983a]/30'
                                           : 'bg-[#c9983a]/25 text-[#8b6f3a] border border-[#c9983a]/40 hover:bg-[#c9983a]/35'
                                           }`}
                                       >
                                         Complete setup
+                                      </button>
+                                    )}
+                                    {!repo.needs_metadata && (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); openEditModal(repo); }}
+                                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 cursor-pointer ${theme === 'dark'
+                                          ? 'bg-white/10 text-[#e8dfd0] border border-white/25 hover:bg-white/15'
+                                          : 'bg-white/30 text-[#2d2820] border border-white/40 hover:bg-white/40'
+                                          }`}
+                                      >
+                                        Edit
                                       </button>
                                     )}
                                   
@@ -423,11 +474,12 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                 </div>
 
                 {/* Footer: Add Repository */}
-                <div className={`px-6 py-5 border-t-2 bg-gradient-to-t from-white/10 to-transparent transition-colors ${theme === 'dark' ? 'border-white/20' : 'border-white/30'
+                <div className={`px-5 py-3 border-t-2 bg-gradient-to-t from-white/10 to-transparent transition-colors ${theme === 'dark' ? 'border-white/20' : 'border-white/30'
                   }`}>
                   <button
+                    type="button"
                     onClick={() => setIsAddModalOpen(true)}
-                    className={`w-full flex items-center justify-between px-5 py-3.5 rounded-[14px] border-2 transition-all group/add ${theme === 'dark'
+                    className={`w-full flex items-center justify-between px-4 py-2.5 rounded-[12px] border-2 transition-all group/add cursor-pointer ${theme === 'dark'
                       ? 'bg-white/10 border-white/25 hover:bg-white/20 hover:border-[#c9983a]/40'
                       : 'bg-white/40 border-white/50 hover:bg-white/60 hover:border-[#c9983a]/40'
                       } hover:shadow-[0_6px_20px_rgba(201,152,58,0.3)]`}
@@ -454,8 +506,9 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
             {tabs.map((tab) => (
               <button
                 key={tab}
+                type="button"
                 onClick={() => setActiveTab(tab)}
-                className={`px-5 py-3 rounded-[14px] text-[14px] font-semibold transition-all ${activeTab === tab
+                className={`px-5 py-3 rounded-[14px] text-[14px] font-semibold transition-all cursor-pointer ${activeTab === tab
                   ? theme === 'dark'
                     ? 'bg-gradient-to-br from-[#c9983a]/40 via-[#d4af37]/35 to-[#c9983a]/30 border-2 border-[#c9983a]/70 text-[#fef5e7]'
                     : 'bg-gradient-to-br from-[#c9983a]/30 via-[#d4af37]/25 to-[#c9983a]/20 border-2 border-[#c9983a]/50 text-[#2d2820]'
@@ -499,12 +552,13 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
         onSuccess={refreshAll}
       />
 
-      {/* New Project Setup Modal (after GitHub App install) */}
+      {/* New Project Setup / Edit metadata Modal */}
       <NewProjectSetupModal
-        isOpen={isNewProjectSetupOpen}
-        project={currentPendingProject}
+        isOpen={isSetupModalOpen}
+        project={setupModalProject}
         onClose={handleNewProjectSetupClose}
         onSuccess={handleNewProjectSetupSuccess}
+        title={editingProject ? 'Edit project' : undefined}
       />
     </div>
   );

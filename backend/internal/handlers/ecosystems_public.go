@@ -40,7 +40,7 @@ SELECT
   COUNT(p.id) AS project_count,
   COUNT(DISTINCT p.owner_user_id) AS user_count
 FROM ecosystems e
-LEFT JOIN projects p ON p.ecosystem_id = e.id
+LEFT JOIN projects p ON p.ecosystem_id = e.id AND p.deleted_at IS NULL
 WHERE e.status = 'active'
 GROUP BY e.id
 ORDER BY e.created_at DESC

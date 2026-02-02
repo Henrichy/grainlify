@@ -469,6 +469,8 @@ func (h *ProjectsPublicHandler) List() fiber.Handler {
 		// Only show verified projects that have completed setup (have metadata)
 		conditions = append(conditions, "p.status = 'verified'")
 		conditions = append(conditions, "p.needs_metadata = false")
+		// Never show private repos (they are soft-deleted)
+		conditions = append(conditions, "p.deleted_at IS NULL")
 
 		// Exclude special GitHub repositories (owner/.github)
 		conditions = append(conditions, "split_part(p.github_full_name, '/', 2) != '.github'")
@@ -772,11 +774,11 @@ func (h *ProjectsPublicHandler) FilterOptions() fiber.Handler {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
 		}
 
-		// Get distinct languages (only from projects that completed setup / appear on Browse)
+		// Get distinct languages (only from projects that completed setup / appear on Browse; exclude private)
 		langRows, err := h.db.Pool.Query(c.Context(), `
 SELECT DISTINCT language
 FROM projects
-WHERE status = 'verified' AND needs_metadata = false AND language IS NOT NULL AND language != ''
+WHERE status = 'verified' AND needs_metadata = false AND deleted_at IS NULL AND language IS NOT NULL AND language != ''
 ORDER BY language
 `)
 		if err != nil {
@@ -792,11 +794,11 @@ ORDER BY language
 			}
 		}
 
-		// Get distinct categories (only from projects that completed setup / appear on Browse)
+		// Get distinct categories (only from projects that completed setup / appear on Browse; exclude private)
 		catRows, err := h.db.Pool.Query(c.Context(), `
 SELECT DISTINCT category
 FROM projects
-WHERE status = 'verified' AND needs_metadata = false AND category IS NOT NULL AND category != ''
+WHERE status = 'verified' AND needs_metadata = false AND deleted_at IS NULL AND category IS NOT NULL AND category != ''
 ORDER BY category
 `)
 		if err != nil {
@@ -812,11 +814,11 @@ ORDER BY category
 			}
 		}
 
-		// Get all unique tags from verified projects that completed setup / appear on Browse
+		// Get all unique tags from verified projects that completed setup / appear on Browse; exclude private
 		tagRows, err := h.db.Pool.Query(c.Context(), `
 SELECT DISTINCT jsonb_array_elements_text(tags) AS tag
 FROM projects
-WHERE status = 'verified' AND needs_metadata = false AND tags IS NOT NULL AND jsonb_array_length(tags) > 0
+WHERE status = 'verified' AND needs_metadata = false AND deleted_at IS NULL AND tags IS NOT NULL AND jsonb_array_length(tags) > 0
 ORDER BY tag
 `)
 		if err != nil {

@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { X, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { X, Loader2, AlertCircle, CheckCircle2, ChevronDown } from 'lucide-react';
 import { useTheme } from '../../../shared/contexts/ThemeContext';
 import {
   getEcosystems,
@@ -13,6 +14,8 @@ interface NewProjectSetupModalProps {
   project: PendingSetupProject | null;
   onClose: () => void;
   onSuccess: () => void;
+  /** Optional title (e.g. "Edit project" when editing). */
+  title?: string;
 }
 
 export function NewProjectSetupModal({
@@ -20,6 +23,7 @@ export function NewProjectSetupModal({
   project,
   onClose,
   onSuccess,
+  title: titleOverride,
 }: NewProjectSetupModalProps) {
   const { theme } = useTheme();
   const darkTheme = theme === 'dark';
@@ -35,10 +39,24 @@ export function NewProjectSetupModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [ecosystemDropdownOpen, setEcosystemDropdownOpen] = useState(false);
+  const ecosystemDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Reset form when project changes
   useEffect(() => {
-    if (project) {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ecosystemDropdownRef.current && !ecosystemDropdownRef.current.contains(e.target as Node)) {
+        setEcosystemDropdownOpen(false);
+      }
+    };
+    if (ecosystemDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [ecosystemDropdownOpen]);
+
+  // Populate form whenever the modal opens or the project changes (so Edit shows existing data)
+  useEffect(() => {
+    if (isOpen && project) {
       setDescription(project.description ?? '');
       setEcosystemName(project.ecosystem_name ?? '');
       setLanguage(project.language ?? '');
@@ -47,7 +65,7 @@ export function NewProjectSetupModal({
       setError(null);
       setSuccess(false);
     }
-  }, [project?.id, project?.description, project?.ecosystem_name, project?.language, project?.tags, project?.category]);
+  }, [isOpen, project?.id, project?.description, project?.ecosystem_name, project?.language, project?.tags, project?.category]);
 
   useEffect(() => {
     if (isOpen) {
@@ -118,11 +136,12 @@ export function NewProjectSetupModal({
 
   if (!isOpen || !project) return null;
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+  const modalContent = (
+    <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
       <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={handleClose}
+        aria-hidden
       />
 
       <div
@@ -142,12 +161,13 @@ export function NewProjectSetupModal({
               darkTheme ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
             }`}
           >
-            New Project Setup
+            {titleOverride ?? 'New Project Setup'}
           </h2>
           <button
+            type="button"
             onClick={handleClose}
             disabled={isSubmitting}
-            className={`p-2 rounded-[10px] transition-all ${
+            className={`p-2 rounded-[10px] transition-all cursor-pointer ${
               darkTheme
                 ? 'hover:bg-white/10 text-[#b8a898] hover:text-[#e8dfd0]'
                 : 'hover:bg-white/20 text-[#7a6b5a] hover:text-[#2d2820]'
@@ -228,7 +248,7 @@ export function NewProjectSetupModal({
           </div>
 
           {/* Ecosystem */}
-          <div>
+          <div ref={ecosystemDropdownRef}>
             <label
               className={`block text-[14px] font-semibold mb-2 transition-colors ${
                 darkTheme ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
@@ -239,24 +259,75 @@ export function NewProjectSetupModal({
             {isLoadingEcosystems ? (
               <SkeletonLoader className="h-12 w-full rounded-[12px]" />
             ) : (
-              <select
-                value={ecosystemName}
-                onChange={(e) => setEcosystemName(e.target.value)}
-                disabled={isSubmitting || ecosystems.length === 0}
-                className={`w-full px-4 py-3 rounded-[12px] border-2 transition-all ${
-                  darkTheme
-                    ? 'bg-white/10 border-white/20 text-[#e8dfd0] focus:border-[#c9983a] focus:bg-white/15'
-                    : 'bg-white/40 border-white/50 text-[#2d2820] focus:border-[#c9983a] focus:bg-white/60'
-                } ${isSubmitting || ecosystems.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-                required
-              >
-                <option value="">Select an ecosystem</option>
-                {ecosystems.map((eco) => (
-                  <option key={eco.slug} value={eco.name}>
-                    {eco.name}
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => !(isSubmitting || ecosystems.length === 0) && setEcosystemDropdownOpen((o) => !o)}
+                  disabled={isSubmitting || ecosystems.length === 0}
+                  className={`w-full px-4 py-3 rounded-[12px] border-2 transition-all flex items-center justify-between gap-2 text-left ${
+                    darkTheme
+                      ? 'bg-white/10 border-white/20 text-[#e8dfd0] focus:border-[#c9983a] focus:bg-white/15 hover:border-white/30'
+                      : 'bg-white/40 border-white/50 text-[#2d2820] focus:border-[#c9983a] focus:bg-white/60 hover:border-white/60'
+                  } ${isSubmitting || ecosystems.length === 0 ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  aria-haspopup="listbox"
+                  aria-expanded={ecosystemDropdownOpen}
+                  aria-required
+                >
+                  <span className={ecosystemName ? '' : 'opacity-70'}>
+                    {ecosystemName || 'Select an ecosystem'}
+                  </span>
+                  <ChevronDown
+                    className={`w-5 h-5 flex-shrink-0 transition-transform ${ecosystemDropdownOpen ? 'rotate-180' : ''} ${
+                      darkTheme ? 'text-[#b8a898]' : 'text-[#7a6b5a]'
+                    }`}
+                    aria-hidden
+                  />
+                </button>
+                {ecosystemDropdownOpen && (
+                  <ul
+                    role="listbox"
+                    className={`absolute top-full left-0 right-0 mt-1 py-1 rounded-[12px] border-2 shadow-lg z-50 max-h-48 overflow-auto ${
+                      darkTheme
+                        ? 'bg-[#3a3228] border-white/30 text-[#e8dfd0]'
+                        : 'bg-[#d4c5b0] border-white/40 text-[#2d2820]'
+                    }`}
+                  >
+                    <li
+                      role="option"
+                      aria-selected={!ecosystemName}
+                      onClick={() => {
+                        setEcosystemName('');
+                        setEcosystemDropdownOpen(false);
+                      }}
+                      className={`px-4 py-2.5 cursor-pointer text-[14px] transition-colors ${
+                        darkTheme
+                          ? 'hover:bg-white/15 data-[selected]:bg-white/10'
+                          : 'hover:bg-white/40 data-[selected]:bg-white/30'
+                      } ${!ecosystemName ? (darkTheme ? 'bg-white/10' : 'bg-white/30') : ''}`}
+                    >
+                      Select an ecosystem
+                    </li>
+                    {ecosystems.map((eco) => (
+                      <li
+                        key={eco.slug}
+                        role="option"
+                        aria-selected={ecosystemName === eco.name}
+                        onClick={() => {
+                          setEcosystemName(eco.name);
+                          setEcosystemDropdownOpen(false);
+                        }}
+                        className={`px-4 py-2.5 cursor-pointer text-[14px] transition-colors ${
+                          darkTheme
+                            ? 'hover:bg-white/15'
+                            : 'hover:bg-white/40'
+                        } ${ecosystemName === eco.name ? (darkTheme ? 'bg-white/10' : 'bg-white/30') : ''}`}
+                      >
+                        {eco.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
 
@@ -321,7 +392,7 @@ export function NewProjectSetupModal({
                 darkTheme
                   ? 'bg-gradient-to-br from-[#c9983a]/40 to-[#d4af37]/30 border-[#c9983a]/70 text-[#fef5e7] hover:from-[#c9983a]/50 hover:to-[#d4af37]/40 shadow-[0_4px_16px_rgba(201,152,58,0.4)]'
                   : 'bg-gradient-to-br from-[#c9983a]/30 to-[#d4af37]/25 border-[#c9983a]/50 text-[#2d2820] hover:from-[#c9983a]/40 hover:to-[#d4af37]/35 shadow-[0_4px_16px_rgba(201,152,58,0.25)]'
-              } ${isSubmitting || success ? 'opacity-50 cursor-not-allowed' : ''}`}
+              } ${isSubmitting || success ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
             >
               {isSubmitting ? (
                 <span className="flex items-center justify-center gap-2">
@@ -339,4 +410,6 @@ export function NewProjectSetupModal({
       </div>
     </div>
   );
+
+  return createPortal(modalContent, document.body);
 }
