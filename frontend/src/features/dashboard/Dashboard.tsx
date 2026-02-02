@@ -173,15 +173,22 @@ export function Dashboard() {
   }, []);
 
   // *******************************
+  // Keep URL in sync with tab and (when viewing an issue) project + issue for shareable / "review their application" links
   useEffect(() => {
-    // Save tab in URL + localStorage whenever it changes
     const params = new URLSearchParams(window.location.search);
     params.set("tab", currentPage);
+    if (selectedProjectId) params.set("project", selectedProjectId);
+    else params.delete("project");
+    if (selectedIssue?.issueId && selectedIssue?.projectId) {
+      params.set("issue", selectedIssue.issueId);
+    } else {
+      params.delete("issue");
+    }
     const newUrl = `${window.location.pathname}?${params.toString()}`;
     window.history.replaceState({}, "", newUrl);
 
     localStorage.setItem("dashboardTab", currentPage);
-  }, [currentPage]);
+  }, [currentPage, selectedProjectId, selectedIssue]);
 
   // Example tab list
   const tabs = [

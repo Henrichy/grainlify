@@ -9,6 +9,13 @@ export function SignInPage() {
   const navigate = useNavigate();
   const [isRedirecting, setIsRedirecting] = useState(false);
 
+  // Persist returnTo so after OAuth we can redirect back to the intended page (e.g. dashboard?tab=browse&project=...&issue=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const returnTo = params.get('returnTo');
+    if (returnTo) sessionStorage.setItem('authReturnTo', returnTo);
+  }, []);
+
   // Check for OAuth callback token in URL (fallback for wrong redirect URL)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

@@ -111,8 +111,12 @@ LIMIT 1
 		}
 		quotedMsg := strings.Join(quotedLines, "\n")
 		// Deep link to this issue in the dashboard so "review their application" opens the exact issue.
-		reviewURL := fmt.Sprintf("%s/dashboard?tab=browse&project=%s&issue=%d",
-			strings.TrimRight(h.cfg.FrontendBaseURL, "/"), projectID.String(), githubIssueID)
+		base := strings.TrimSpace(strings.TrimRight(h.cfg.FrontendBaseURL, "/"))
+		reviewURL := fmt.Sprintf("%s/dashboard?tab=browse&project=%s&issue=%d", base, projectID.String(), githubIssueID)
+		if base == "" || !strings.HasPrefix(base, "http") {
+			// Fallback: relative path only if FrontendBaseURL not configured (link will use current origin)
+			reviewURL = fmt.Sprintf("/dashboard?tab=browse&project=%s&issue=%d", projectID.String(), githubIssueID)
+		}
 		if issueURL == "" {
 			issueURL = fmt.Sprintf("https://github.com/%s/issues/%d", fullName, issueNumber)
 		}
