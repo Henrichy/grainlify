@@ -1128,12 +1128,12 @@ Only applications submitted via the apply link above will be considered. Please 
         }
       >
         <p className={`text-[13px] mb-3 ${isDark ? 'text-[#b8a898]' : 'text-[#7a6b5a]'}`}>
-          Your message will be posted as a comment on the GitHub issue with the prefix &quot;[grainlify application]&quot;.
+          Your comment on GitHub will look like: <strong>@{user?.github?.login ?? 'you'} has applied to work on this issue as part of the Grainlify program.</strong> Your message below will appear in a blockquote, followed by instructions for repo maintainers to review or assign you.
         </p>
         <textarea
           value={applicationDraft}
           onChange={(e) => setApplicationDraft(e.target.value)}
-          placeholder="Write your application message…"
+          placeholder="e.g. Hi, I'm a smart contract and backend developer. I'm confident I can tackle this issue—can you assign me?"
           className={`w-full min-h-[120px] rounded-[12px] border px-4 py-3 text-[13px] outline-none transition-colors ${isDark
             ? 'bg-white/[0.06] border-white/15 text-[#e8dfd0] placeholder:text-[#b8a898]/60'
             : 'bg-white/[0.25] border-white/30 text-[#2d2820] placeholder:text-[#7a6b5a]/70'

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -103,7 +104,14 @@ LIMIT 1
 		}
 
 		// Create GitHub comment as the applicant (OAuth token).
-		commentBody := grainlifyApplicationPrefix + "\n\n" + req.Message
+		// Use Drips Wave–style template: header, blockquote for message, maintainer instructions.
+		quotedLines := strings.Split(req.Message, "\n")
+		for i := range quotedLines {
+			quotedLines[i] = "> " + quotedLines[i]
+		}
+		quotedMsg := strings.Join(quotedLines, "\n")
+		commentBody := fmt.Sprintf("%s\n\n**@%s has applied to work on this issue as part of the Grainlify program.**\n\n%s\n\nRepo Maintainers: To accept this application, review their application or assign @%s to this issue.",
+			grainlifyApplicationPrefix, linked.Login, quotedMsg, linked.Login)
 		gh := github.NewClient()
 		ghComment, err := gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
 		if err != nil {
