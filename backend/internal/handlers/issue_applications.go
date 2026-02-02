@@ -73,19 +73,20 @@ func (h *IssueApplicationsHandler) Apply() fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "github_not_linked"})
 		}
 
-		// Load repo + issue state from DB.
-		var fullName string
+		// Load repo + issue state + optional app installation and issue URL from DB.
+		var fullName, issueURL string
 		var state string
 		var authorLogin string
 		var assigneesJSON []byte
+		var installationID *string
 		if err := h.db.Pool.QueryRow(c.Context(), `
-SELECT p.github_full_name, gi.state, gi.author_login, gi.assignees
+SELECT p.github_full_name, p.github_app_installation_id, gi.state, gi.author_login, gi.assignees, COALESCE(gi.url, '')
 FROM projects p
 JOIN github_issues gi ON gi.project_id = p.id
 WHERE p.id = $1 AND p.status = 'verified' AND p.deleted_at IS NULL
   AND gi.number = $2
 LIMIT 1
-`, projectID, issueNumber).Scan(&fullName, &state, &authorLogin, &assigneesJSON); err != nil {
+`, projectID, issueNumber).Scan(&fullName, &installationID, &state, &authorLogin, &assigneesJSON, &issueURL); err != nil {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "issue_not_found"})
 		}
 
@@ -103,17 +104,46 @@ LIMIT 1
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "issue_already_assigned"})
 		}
 
-		// Create GitHub comment as the applicant (OAuth token).
-		// Use Drips Wave–style template: header, blockquote for message, maintainer instructions.
+		// Build Drips Wave–style template: header, blockquote for message, maintainer instructions with links.
 		quotedLines := strings.Split(req.Message, "\n")
 		for i := range quotedLines {
 			quotedLines[i] = "> " + quotedLines[i]
 		}
 		quotedMsg := strings.Join(quotedLines, "\n")
-		commentBody := fmt.Sprintf("%s\n\n**@%s has applied to work on this issue as part of the Grainlify program.**\n\n%s\n\nRepo Maintainers: To accept this application, review their application or assign @%s to this issue.",
-			grainlifyApplicationPrefix, linked.Login, quotedMsg, linked.Login)
+		reviewURL := strings.TrimRight(h.cfg.FrontendBaseURL, "/") + "/dashboard?page=maintainers"
+		if issueURL == "" {
+			issueURL = fmt.Sprintf("https://github.com/%s/issues/%d", fullName, issueNumber)
+		}
+		commentBody := fmt.Sprintf("%s\n\n**@%s has applied to work on this issue as part of the Grainlify program.**\n\n%s\n\nRepo Maintainers: To accept this application, [review their application](%s) or [assign @%s](%s) to this issue.",
+			grainlifyApplicationPrefix, linked.Login, quotedMsg, reviewURL, linked.Login, issueURL)
 		gh := github.NewClient()
-		ghComment, err := gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
+
+		// Post as Grainlify bot when project has the app installed so GitHub shows "with Grainlify" (like Drips Wave).
+		var ghComment github.IssueComment
+		instID := ""
+		if installationID != nil {
+			instID = strings.TrimSpace(*installationID)
+		}
+		if instID != "" && strings.TrimSpace(h.cfg.GitHubAppID) != "" && strings.TrimSpace(h.cfg.GitHubAppPrivateKey) != "" {
+			appClient, errApp := github.NewGitHubAppClient(h.cfg.GitHubAppID, h.cfg.GitHubAppPrivateKey)
+			if errApp == nil {
+				token, errTok := appClient.GetInstallationToken(c.Context(), instID)
+				if errTok == nil {
+					ghComment, err = gh.CreateIssueComment(c.Context(), token, fullName, issueNumber, commentBody)
+					if err != nil {
+						slog.Warn("failed to create github issue comment as bot for application, falling back to user",
+							"project_id", projectID.String(), "error", err)
+						ghComment, err = gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
+					}
+				} else {
+					ghComment, err = gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
+				}
+			} else {
+				ghComment, err = gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
+			}
+		} else {
+			ghComment, err = gh.CreateIssueComment(c.Context(), linked.AccessToken, fullName, issueNumber, commentBody)
+		}
 		if err != nil {
 			slog.Warn("failed to create github issue comment for application",
 				"project_id", projectID.String(),

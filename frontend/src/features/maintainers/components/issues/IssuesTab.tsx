@@ -248,6 +248,25 @@ Only applications submitted via the apply link above will be considered. Please 
     return comments.filter((c) => (c?.body || '').toLowerCase().startsWith(GRAINLIFY_APP_PREFIX)).length;
   };
 
+  // Extract the applicant's custom message from a Grainlify application comment body.
+  // New template: blockquote holds the message; fallback to full body after prefix.
+  const getApplicationMessage = (body: string): string => {
+    const afterPrefix = body.replace(new RegExp(`^${GRAINLIFY_APP_PREFIX}\\s*`, 'i'), '').trim();
+    const lines = afterPrefix.split('\n');
+    const blockquoteLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith('> ')) {
+        blockquoteLines.push(line.slice(2));
+      } else if (blockquoteLines.length > 0) {
+        break; // end of blockquote
+      }
+    }
+    if (blockquoteLines.length > 0) {
+      return blockquoteLines.join('\n').trim();
+    }
+    return afterPrefix;
+  };
+
   const getApplicationData = (issue: Issue | null, issueFromAPI: IssueFromAPI | null) => {
     if (!issue || !issueFromAPI) return null;
 
@@ -256,15 +275,20 @@ Only applications submitted via the apply link above will be considered. Please 
     const issueAuthor = issueFromAPI.author_login;
 
     // Applications are explicit Grainlify application comments (so discussions can contain other chatter).
+    // When posted as Grainlify bot, body contains "**@username has applied" – use that as display author.
     const applications = comments
       .filter(comment => (comment.body || '').toLowerCase().startsWith(GRAINLIFY_APP_PREFIX))
-      .map((comment) => ({
-        id: comment.id.toString(),
-        author: {
-          name: comment.user.login,
-          avatar: getGitHubAvatar(comment.user.login, 48),
-        },
-        message: (comment.body || '').replace(new RegExp(`^${GRAINLIFY_APP_PREFIX}\\s*`, 'i'), '').trim(),
+      .map((comment) => {
+        const body = comment.body || '';
+        const applicantMatch = body.match(/\*\*@(\S+)\s+has\s+applied/i);
+        const applicantLogin = applicantMatch ? applicantMatch[1] : comment.user.login;
+        return {
+          id: comment.id.toString(),
+          author: {
+            name: applicantLogin,
+            avatar: getGitHubAvatar(applicantLogin, 48),
+          },
+          message: getApplicationMessage(body),
         timeAgo: formatTimeAgo(comment.created_at),
         isAssigned: issue.applicationStatus === 'assigned',
         // These would need to come from user profile API in the future
@@ -272,7 +296,8 @@ Only applications submitted via the apply link above will be considered. Please 
         rewards: 0,
         projectsContributed: 0,
         projectsLead: 0,
-      }));
+        };
+      });
 
     // Discussions are all comments (including from the author)
     const discussions = comments.map((comment) => ({
