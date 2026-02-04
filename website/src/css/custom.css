@@ -3,47 +3,47 @@
  * Add any overrides or theme customizations here.
  */
 
-/* Prevent overflow on both axes; contain scroll to main content so nothing shows above navbar */
+/* Page scrolls as one: footer appears when you scroll to the bottom (not fixed at viewport bottom) */
 html,
 body {
-  overflow: hidden !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   height: 100%;
+  min-height: 100%;
 }
 #__docusaurus {
-  height: 100vh !important;
-  min-height: 100vh;
-  overflow: hidden !important;
+  min-height: 100vh !important;
   display: flex !important;
   flex-direction: column !important;
 }
-/* Main wrapper: no scroll here so sidebar and main can scroll separately */
+/* Main wrapper: grow with content so footer sits below and is reached by scrolling */
 #__docusaurus [class*="mainWrapper"] {
-  flex: 1 1 0 !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
+  flex: 1 0 auto !important;
   display: flex !important;
   flex-direction: column !important;
 }
-/* Doc layout: fill height and allow two scroll areas (sidebar + main) */
+/* Doc layout: grow with content */
 #__docusaurus [class*="docRoot"] {
-  flex: 1 1 0 !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
+  flex: 1 0 auto !important;
+  display: flex !important;
 }
 #__docusaurus [class*="docsWrapper"] {
-  flex: 1 1 0 !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
+  flex: 1 0 auto !important;
   display: flex !important;
 }
-/* Sidebar: scroll independently; allow shrink when collapsed so toggle works */
+/* Sidebar: fixed width, sticky so it stays visible while page scrolls; scroll only when nav is long */
 #__docusaurus .theme-doc-sidebar-container {
-  flex: 0 1 var(--doc-sidebar-width, 300px) !important;
+  flex: 0 0 var(--doc-sidebar-width, 300px) !important;
+  width: var(--doc-sidebar-width, 300px) !important;
   min-width: var(--doc-sidebar-width, 300px) !important;
-  min-height: 0 !important;
+  transition: width 0.2s ease !important;
+}
+#__docusaurus .theme-doc-sidebar-container [class*='sidebarViewport'] {
+  position: sticky !important;
+  top: 0 !important;
+  max-height: 100vh !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  transition: width 0.2s ease !important;
 }
 /* When collapsed: force narrow width so collapse/expand toggle works */
 #__docusaurus .theme-doc-sidebar-container[class*='docSidebarContainerHidden'] {
@@ -57,12 +57,10 @@ body {
   visibility: hidden !important;
   pointer-events: none !important;
 }
-/* Main content: scroll independently */
+/* Main content: no own scroll; flows so the page scrolls and footer appears at bottom */
 #__docusaurus [class*="docMainContainer"] {
   flex: 1 1 0 !important;
-  min-height: 0 !important;
-  overflow-y: auto !important;
-  overflow-x: hidden !important;
+  min-width: 0 !important;
 }
 
 /* Brand-aligned warm palette (matches app landing/dashboard) */
