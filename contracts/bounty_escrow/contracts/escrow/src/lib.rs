@@ -93,7 +93,8 @@ mod test_bounty_escrow;
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized, emit_funds_locked,
     emit_funds_refunded, emit_funds_released, BatchFundsLocked, BatchFundsReleased,
-    BountyEscrowInitialized, FundsLocked, FundsRefunded, FundsReleased,
+    BountyEscrowInitialized, ClaimCancelled, ClaimCreated, ClaimExecuted, FundsLocked,
+    FundsRefunded, FundsReleased,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, token, vec, Address, Env,
@@ -519,6 +520,25 @@ pub struct RefundApproval {
     pub approved_at: u64,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimRecord {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+    pub claimed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClaimStatus {
+    Pending,
+    Claimed,
+    Cancelled,
+    Expired,
+}
+
 /// Complete escrow record for a bounty.
 ///
 /// # Fields
@@ -620,6 +640,8 @@ pub enum DataKey {
     ReentrancyGuard,
     MultisigConfig,
     ReleaseApproval(u64), // bounty_id -> ReleaseApproval
+    PendingClaim(u64), // bounty_id -> ClaimRecord
+    ClaimWindow,       // u64 seconds (global config)
 }
 
 // ============================================================================
@@ -1279,6 +1301,184 @@ impl BountyEscrowContract {
         let duration = env.ledger().timestamp().saturating_sub(start);
         monitoring::emit_performance(&env, symbol_short!("release"), duration);
         Ok(())
+    }
+
+    /// Set the claim window duration (admin only).
+    /// claim_window: seconds beneficiary has to claim after release is authorized.
+    pub fn set_claim_window(env: Env, claim_window: u64) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimWindow, &claim_window);
+        Ok(())
+    }
+
+    /// Authorize a release as a pending claim instead of immediate transfer.
+    /// Admin calls this instead of release_funds when claim period is active.
+    /// Beneficiary must call claim() within the window to receive funds.
+    pub fn authorize_claim(env: Env, bounty_id: u64, recipient: Address) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        if escrow.status != EscrowStatus::Locked {
+            return Err(Error::FundsNotLocked);
+        }
+
+        let claim_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ClaimWindow)
+            .unwrap_or(86400); // 24h default
+        let now = env.ledger().timestamp();
+        let claim = ClaimRecord {
+            bounty_id,
+            recipient: recipient.clone(),
+            amount: escrow.amount,
+            expires_at: now.saturating_add(claim_window),
+            claimed: false,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingClaim(bounty_id), &claim);
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("created")),
+            ClaimCreated {
+                bounty_id,
+                recipient,
+                amount: escrow.amount,
+                expires_at: claim.expires_at,
+            },
+        );
+        Ok(())
+    }
+
+    /// Beneficiary calls this to claim their authorized funds within the window.
+    pub fn claim(env: Env, bounty_id: u64) -> Result<(), Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .unwrap();
+
+        claim.recipient.require_auth();
+
+        let now = env.ledger().timestamp();
+        if now > claim.expires_at {
+            return Err(Error::DeadlineNotPassed); // reuse or add ClaimExpired error
+        }
+        if claim.claimed {
+            return Err(Error::FundsNotLocked);
+        }
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(
+            &env.current_contract_address(),
+            &claim.recipient,
+            &claim.amount,
+        );
+
+        // Update escrow status
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        escrow.status = EscrowStatus::Released;
+        escrow.remaining_amount = 0;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        claim.claimed = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::PendingClaim(bounty_id), &claim);
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("done")),
+            ClaimExecuted {
+                bounty_id,
+                recipient: claim.recipient.clone(),
+                amount: claim.amount,
+                claimed_at: now,
+            },
+        );
+        Ok(())
+    }
+
+    /// Admin can cancel an expired or unwanted pending claim, returning escrow to Locked.
+    pub fn cancel_pending_claim(env: Env, bounty_id: u64) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            return Err(Error::BountyNotFound);
+        }
+        let claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .unwrap();
+
+        if claim.claimed {
+            return Err(Error::FundsNotLocked);
+        }
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingClaim(bounty_id));
+
+        env.events().publish(
+            (symbol_short!("claim"), symbol_short!("cancel")),
+            ClaimCancelled {
+                bounty_id,
+                recipient: claim.recipient,
+                amount: claim.amount,
+                cancelled_at: env.ledger().timestamp(),
+                cancelled_by: admin,
+            },
+        );
+        Ok(())
+    }
+
+    /// View: get pending claim for a bounty.
+    pub fn get_pending_claim(env: Env, bounty_id: u64) -> Result<ClaimRecord, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingClaim(bounty_id))
+            .ok_or(Error::BountyNotFound)
     }
 
     /// Approve a refund before deadline (admin only).

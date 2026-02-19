@@ -579,6 +579,54 @@ pub struct ProgramReleaseHistory {
     pub release_type: ReleaseType,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimRecord {
+    pub bounty_id: u64,       
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,      
+    pub claimed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClaimStatus {
+    Pending,
+    Claimed,
+    Cancelled,
+    Expired,
+}
+
+
+    #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimCreated {
+    pub bounty_id: u64,      
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimExecuted {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub claimed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimCancelled {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub cancelled_at: u64,
+    pub cancelled_by: Address,
+}
+
 /// Type of release execution for programs.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -691,6 +739,8 @@ pub struct PayoutApproval {
     pub recipient: Address,
     pub amount: i128,
     pub approvals: Vec<Address>,
+    PendingClaim(String, u64), // (program_id, schedule_id) -> ClaimRecord
+    ClaimWindow, // u64 seconds (global config)
 }
 
 // ============================================================================
@@ -1913,6 +1963,143 @@ impl ProgramEscrowContract {
         let duration = env.ledger().timestamp().saturating_sub(start);
         monitoring::emit_performance(&env, symbol_short!("rel_man"), duration);
     }
+
+    /// Set the claim window duration for a program (authorized payout key only).
+pub fn set_program_claim_window(env: Env, program_id: String, claim_window: u64) {
+    let program_key = DataKey::Program(program_id.clone());
+    let program_data: ProgramData = env.storage().instance().get(&program_key)
+        .unwrap_or_else(|| panic!("Program not found"));
+    program_data.authorized_payout_key.require_auth();
+    env.storage().instance().set(&DataKey::ClaimWindow, &claim_window);
+}
+
+/// Authorize a schedule release as a pending claim (authorized payout key only).
+/// Beneficiary must call claim_program_schedule() within the window.
+pub fn authorize_program_schedule_claim(env: Env, program_id: String, schedule_id: u64) {
+    let program_key = DataKey::Program(program_id.clone());
+    let program_data: ProgramData = env.storage().instance().get(&program_key)
+        .unwrap_or_else(|| panic!("Program not found"));
+    program_data.authorized_payout_key.require_auth();
+
+    let schedule: ProgramReleaseSchedule = env.storage().persistent()
+        .get(&DataKey::ReleaseSchedule(program_id.clone(), schedule_id))
+        .unwrap_or_else(|| panic!("Schedule not found"));
+
+    if schedule.released {
+        panic!("Schedule already released");
+    }
+
+    let claim_window: u64 = env.storage().instance().get(&DataKey::ClaimWindow).unwrap_or(86400);
+    let now = env.ledger().timestamp();
+    let claim = ClaimRecord {
+        bounty_id: schedule_id,
+        recipient: schedule.recipient.clone(),
+        amount: schedule.amount,
+        expires_at: now.saturating_add(claim_window),
+        claimed: false,
+    };
+
+    env.storage().persistent().set(&DataKey::PendingClaim(program_id.clone(), schedule_id), &claim);
+
+    env.events().publish(
+        (symbol_short!("claim"), symbol_short!("created")),
+        ClaimCreated {
+            bounty_id: schedule_id,
+            recipient: schedule.recipient,
+            amount: schedule.amount,
+            expires_at: claim.expires_at,
+        },
+    );
+}
+
+/// Beneficiary claims their authorized schedule funds within the window.
+pub fn claim_program_schedule(env: Env, program_id: String, schedule_id: u64) {
+    if !env.storage().persistent().has(&DataKey::PendingClaim(program_id.clone(), schedule_id)) {
+        panic!("No pending claim found");
+    }
+    let mut claim: ClaimRecord = env.storage().persistent()
+        .get(&DataKey::PendingClaim(program_id.clone(), schedule_id))
+        .unwrap();
+
+    claim.recipient.require_auth();
+
+    let now = env.ledger().timestamp();
+    if now > claim.expires_at {
+        panic!("Claim window expired");
+    }
+    if claim.claimed {
+        panic!("Already claimed");
+    }
+
+    let program_key = DataKey::Program(program_id.clone());
+    let mut program_data: ProgramData = env.storage().instance().get(&program_key).unwrap();
+    let token_client = token::Client::new(&env, &program_data.token_address);
+
+    token_client.transfer(&env.current_contract_address(), &claim.recipient, &claim.amount);
+
+    // Mark schedule released
+    let mut schedule: ProgramReleaseSchedule = env.storage().persistent()
+        .get(&DataKey::ReleaseSchedule(program_id.clone(), schedule_id))
+        .unwrap();
+    schedule.released = true;
+    schedule.released_at = Some(now);
+    schedule.released_by = Some(claim.recipient.clone());
+    program_data.remaining_balance -= claim.amount;
+
+    claim.claimed = true;
+    env.storage().persistent().set(&DataKey::PendingClaim(program_id.clone(), schedule_id), &claim);
+    env.storage().persistent().set(&DataKey::ReleaseSchedule(program_id.clone(), schedule_id), &schedule);
+    env.storage().instance().set(&program_key, &program_data);
+
+    env.events().publish(
+        (symbol_short!("claim"), symbol_short!("done")),
+        ClaimExecuted {
+            bounty_id: schedule_id,
+            recipient: claim.recipient.clone(),
+            amount: claim.amount,
+            claimed_at: now,
+        },
+    );
+}
+
+/// Admin cancels an unclaimed (possibly expired) pending claim.
+pub fn cancel_program_claim(env: Env, program_id: String, schedule_id: u64) {
+    let program_key = DataKey::Program(program_id.clone());
+    let program_data: ProgramData = env.storage().instance().get(&program_key)
+        .unwrap_or_else(|| panic!("Program not found"));
+    program_data.authorized_payout_key.require_auth();
+
+    if !env.storage().persistent().has(&DataKey::PendingClaim(program_id.clone(), schedule_id)) {
+        panic!("No pending claim found");
+    }
+    let claim: ClaimRecord = env.storage().persistent()
+        .get(&DataKey::PendingClaim(program_id.clone(), schedule_id))
+        .unwrap();
+
+    if claim.claimed {
+        panic!("Claim already executed");
+    }
+
+    env.storage().persistent().remove(&DataKey::PendingClaim(program_id, schedule_id));
+
+    env.events().publish(
+        (symbol_short!("claim"), symbol_short!("cancel")),
+        ClaimCancelled {
+            bounty_id: schedule_id,
+            recipient: claim.recipient,
+            amount: claim.amount,
+            cancelled_at: env.ledger().timestamp(),
+            cancelled_by: program_data.authorized_payout_key,
+        },
+    );
+}
+
+/// View: get a pending claim for a program schedule.
+pub fn get_program_pending_claim(env: Env, program_id: String, schedule_id: u64) -> ClaimRecord {
+    env.storage().persistent()
+        .get(&DataKey::PendingClaim(program_id, schedule_id))
+        .unwrap_or_else(|| panic!("No pending claim found"))
+}
 
     // ========================================================================
     // View Functions (Read-only)

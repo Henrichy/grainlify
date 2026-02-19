@@ -362,4 +362,29 @@ pub struct ApprovalAdded {
 pub fn emit_approval_added(env: &Env, event: ApprovalAdded) {
     let topics = (symbol_short!("approval"), event.bounty_id);
     env.events().publish(topics, event.clone());
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimCreated {
+    pub bounty_id: u64, // use program_id+schedule_id equivalent in program-escrow
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimExecuted {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub claimed_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimCancelled {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub cancelled_at: u64,
+    pub cancelled_by: Address,
 }
