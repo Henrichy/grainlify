@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, vec, Address, Env, String,
+    token, vec, Address, Env, Map, String, Symbol, TryFromVal, Val,
 };
 
 fn setup_program(
@@ -40,6 +40,16 @@ fn setup_program(
 fn next_seed(seed: &mut u64) -> u64 {
     *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
     *seed
+}
+
+fn assert_event_data_has_v2_tag(env: &Env, data: &Val) {
+    let data_map: Map<Symbol, Val> =
+        Map::try_from_val(env, data).unwrap_or_else(|_| panic!("event payload should be a map"));
+    let version_val = data_map
+        .get(Symbol::new(env, "version"))
+        .unwrap_or_else(|| panic!("event payload must contain version field"));
+    let version = u32::try_from_val(env, &version_val).expect("version should decode as u32");
+    assert_eq!(version, 2);
 }
 
 #[test]
@@ -243,6 +253,32 @@ fn test_gas_proxy_batch_vs_single_event_efficiency() {
 }
 
 #[test]
+fn test_events_emit_v2_version_tags_for_all_program_emitters() {
+    let env = Env::default();
+    let (client, _admin, _token_client, _token_admin) = setup_program(&env, 100_000);
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    client.single_payout(&r1, &10_000);
+    let recipients = vec![&env, r2];
+    let amounts = vec![&env, 5_000];
+    client.batch_payout(&recipients, &amounts);
+
+    let events = env.events().all();
+    let mut program_events_checked = 0_u32;
+    for (contract, _topics, data) in events.iter() {
+        if contract != client.address {
+            continue;
+        }
+        assert_event_data_has_v2_tag(&env, &data);
+        program_events_checked += 1;
+    }
+
+    // init_program, lock_program_funds, single_payout, batch_payout
+    assert!(program_events_checked >= 4);
+}
+
+#[test]
 fn test_release_schedule_exact_timestamp_boundary() {
     let env = Env::default();
     let (client, _admin, token_client, _token_admin) = setup_program(&env, 100_000);
@@ -323,3 +359,16 @@ fn test_release_schedule_overlapping_schedules() {
     let history = client.get_program_release_history();
     assert_eq!(history.len(), 3);
 }
+
+// =============================================================================
+// TESTS FOR MULTI-TENANT ISOLATION
+// =============================================================================
+
+// Note: Comprehensive multi-tenant isolation tests are implemented in lib.rs
+// using the ProgramEscrowContractClient for proper integration testing.
+// The tests verify:
+// - Funds and balance isolation between programs
+// - Payout history isolation
+// - Release schedule isolation
+// - Release history isolation
+// - Analytics isolation concepts (for future program-specific analytics)
