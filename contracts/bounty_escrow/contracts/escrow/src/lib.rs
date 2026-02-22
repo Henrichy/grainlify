@@ -656,7 +656,7 @@ impl BountyEscrowContract {
 
         let mut flags = Self::get_pause_flags(&env);
         let timestamp = env.ledger().timestamp();
-        
+
         if reason.is_some() {
             flags.pause_reason = reason.clone();
         }
@@ -704,7 +704,7 @@ impl BountyEscrowContract {
         }
 
         let any_paused = flags.lock_paused || flags.release_paused || flags.refund_paused;
-        
+
         if any_paused {
             if flags.paused_at == 0 {
                 flags.paused_at = timestamp;
@@ -720,7 +720,11 @@ impl BountyEscrowContract {
 
     /// Emergency withdraw all funds (admin only, must have lock_paused = true)
     pub fn emergency_withdraw(env: Env, target: Address) -> Result<(), Error> {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
         admin.require_auth();
 
         let flags = Self::get_pause_flags(&env);
@@ -730,20 +734,20 @@ impl BountyEscrowContract {
 
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token_client = token::TokenClient::new(&env, &token_address);
-        
+
         let contract_address = env.current_contract_address();
         let balance = token_client.balance(&contract_address);
-        
+
         if balance > 0 {
             token_client.transfer(&contract_address, &target, &balance);
             events::emit_emergency_withdraw(
-                &env, 
+                &env,
                 events::EmergencyWithdrawEvent {
                     admin,
                     recipient: target,
                     amount: balance,
                     timestamp: env.ledger().timestamp(),
-                }
+                },
             );
         }
 

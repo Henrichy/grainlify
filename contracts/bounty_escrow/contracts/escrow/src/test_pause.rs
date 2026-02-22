@@ -1,11 +1,11 @@
 #![cfg(test)]
 
 use super::*;
+use crate::PauseStateChanged;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    token, Address, Env, Symbol, TryIntoVal, IntoVal,
+    token, Address, Env, IntoVal, Symbol, TryIntoVal,
 };
-use crate::PauseStateChanged;
 
 fn create_token_contract<'a>(
     e: &Env,
@@ -168,21 +168,16 @@ fn test_mixed_pause_states() {
 #[should_panic(expected = "Error(Auth, InvalidAction)")]
 fn test_pause_by_non_admin_fails() {
     let env = Env::default();
-    env.mock_all_auths();
-    
+    // Do NOT mock_all_auths — we want admin.require_auth() to fail
+
     let admin = Address::generate(&env);
     let (token_client, _) = create_token_contract(&env, &admin);
-    let (escrow_client, escrow_id) = create_escrow_contract(&env);
-    
-    // Explicitly sign as non-admin
-    let non_admin = Address::generate(&env);
-    
+    let (escrow_client, _escrow_id) = create_escrow_contract(&env);
+
     escrow_client.init(&admin, &token_client.address);
-    
-    // Try to pause with non-admin
-    non_admin.require_auth();
-    let client_non_admin = BountyEscrowContractClient::new(&env, &escrow_id);
-    client_non_admin.set_paused(&Some(true), &Some(true), &Some(true), &None);
+
+    // Try to pause without providing admin auth — should panic
+    escrow_client.set_paused(&Some(true), &Some(true), &Some(true), &None);
 }
 
 #[test]
@@ -234,8 +229,18 @@ fn test_batch_lock_funds_while_paused_fails() {
     let deadline = env.ledger().timestamp() + 1000;
     let items = soroban_sdk::vec![
         &env,
-        LockFundsItem { bounty_id: 1, amount: 100, depositor: depositor.clone(), deadline },
-        LockFundsItem { bounty_id: 2, amount: 100, depositor: depositor.clone(), deadline }
+        LockFundsItem {
+            bounty_id: 1,
+            amount: 100,
+            depositor: depositor.clone(),
+            deadline
+        },
+        LockFundsItem {
+            bounty_id: 2,
+            amount: 100,
+            depositor: depositor.clone(),
+            deadline
+        }
     ];
 
     let res = escrow_client.try_batch_lock_funds(&items);
@@ -266,9 +271,12 @@ fn test_batch_release_funds_while_paused_fails() {
 
     let items = soroban_sdk::vec![
         &env,
-        ReleaseFundsItem { bounty_id: 1, contributor: contributor.clone() }
+        ReleaseFundsItem {
+            bounty_id: 1,
+            contributor: contributor.clone()
+        }
     ];
-    
+
     let res = escrow_client.try_batch_release_funds(&items);
     assert!(res.is_err());
 }
@@ -290,25 +298,25 @@ fn test_operations_resume_after_unpause() {
 
     // Pause everything
     escrow_client.set_paused(&Some(true), &Some(true), &Some(true), &None);
-    
+
     let deadline = env.ledger().timestamp() + 1000;
     let res_lock = escrow_client.try_lock_funds(&depositor, &1u64, &100, &deadline);
     assert!(res_lock.is_err());
 
     // Unpause lock
     escrow_client.set_paused(&Some(false), &None, &None, &None);
-    
+
     // Now it works
     escrow_client.lock_funds(&depositor, &1u64, &100, &deadline);
-    
+
     // Release still paused though
     let contributor = Address::generate(&env);
     let res_release = escrow_client.try_release_funds(&1u64, &contributor);
     assert!(res_release.is_err());
-    
+
     // Unpause release
     escrow_client.set_paused(&None, &Some(false), &None, &None);
-    
+
     // Now release works
     escrow_client.release_funds(&1u64, &contributor);
 }
@@ -345,14 +353,14 @@ fn test_emergency_withdraw_non_admin_fails() {
     let admin = Address::generate(&env);
     let (token_client, _) = create_token_contract(&env, &admin);
     let (escrow_client, _) = create_escrow_contract(&env);
-    
+
     let target = Address::generate(&env);
     escrow_client.init(&admin, &token_client.address);
     escrow_client.emergency_withdraw(&target);
 }
 
 #[test]
-#[should_panic(expected = "NotPaused")]
+#[should_panic(expected = "Error(Contract, #21)")]
 fn test_emergency_withdraw_unpaused_fails() {
     let env = Env::default();
     env.mock_all_auths();
@@ -360,7 +368,7 @@ fn test_emergency_withdraw_unpaused_fails() {
     let (token_client, _) = create_token_contract(&env, &admin);
     let (escrow_client, _) = create_escrow_contract(&env);
     let target = Address::generate(&env);
-    
+
     escrow_client.init(&admin, &token_client.address);
     escrow_client.emergency_withdraw(&target);
 }
@@ -374,20 +382,20 @@ fn test_emergency_withdraw_succeeds() {
     let (token_client, token_admin_client) = create_token_contract(&env, &admin);
     let (escrow_client, _) = create_escrow_contract(&env);
     let target = Address::generate(&env);
-    
+
     escrow_client.init(&admin, &token_client.address);
     token_admin_client.mint(&depositor, &1000);
-    
+
     let deadline = env.ledger().timestamp() + 1000;
     escrow_client.lock_funds(&depositor, &1u64, &500i128, &deadline);
-    
+
     assert_eq!(token_client.balance(&escrow_client.address), 500);
-    
+
     let reason = soroban_sdk::String::from_str(&env, "Hacked");
     escrow_client.set_paused(&Some(true), &None, &None, &Some(reason));
-    
+
     escrow_client.emergency_withdraw(&target);
-    
+
     assert_eq!(token_client.balance(&escrow_client.address), 0);
     assert_eq!(token_client.balance(&target), 500);
 }
