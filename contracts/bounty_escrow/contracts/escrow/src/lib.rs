@@ -1,5 +1,6 @@
 #![no_std]
 mod events;
+mod invariants;
 
 #[cfg(test)]
 mod test_rbac;
@@ -949,6 +950,7 @@ impl BountyEscrowContract {
             refund_history: vec![&env],
             remaining_amount: amount,
         };
+        invariants::assert_escrow(&env, &escrow);
 
         // Extend the TTL of the storage entry to ensure it lives long enough
         env.storage()
@@ -1039,6 +1041,8 @@ impl BountyEscrowContract {
         );
 
         escrow.status = EscrowStatus::Released;
+        escrow.remaining_amount = 0;
+        invariants::assert_escrow(&env, &escrow);
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
@@ -1427,6 +1431,8 @@ impl BountyEscrowContract {
         // Transfer the calculated refund amount to the designated recipient
         client.transfer(&env.current_contract_address(), &refund_to, &refund_amount);
 
+        escrow.status = EscrowStatus::Refunded;
+        invariants::assert_escrow(&env, &escrow);
         // Update escrow state: subtract the amount exactly refunded
         escrow.remaining_amount -= refund_amount;
         if is_full || escrow.remaining_amount == 0 {
@@ -2155,8 +2161,11 @@ mod test_bounty_escrow;
 mod test_dispute_resolution;
 mod test_expiration_and_dispute;
 #[cfg(test)]
+mod test_front_running_ordering;
+#[cfg(test)]
 mod test_granular_pause;
 #[cfg(test)]
+mod test_invariants;
 mod test_lifecycle;
 #[cfg(test)]
 mod test_pause;

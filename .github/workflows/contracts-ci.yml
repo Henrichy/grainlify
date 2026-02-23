@@ -75,6 +75,12 @@ jobs:
           cd contracts/escrow
           cargo test --verbose --lib
 
+      - name: Run invariant checker tests
+        run: |
+          source $HOME/.cargo/env
+          cd contracts/escrow
+          cargo test --verbose --lib invariant_checker_ci
+
       - name: Build Soroban contract
         run: |
           source $HOME/.cargo/env
