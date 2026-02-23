@@ -1578,4 +1578,7 @@ mod test {
         assert_eq!(state.from_version, v_before);
         assert_eq!(state.to_version, 3);
     }
+
+    #[cfg(test)]
+    mod upgrade_rollback_tests;
 }
