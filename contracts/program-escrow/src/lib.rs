@@ -161,6 +161,9 @@ mod malicious_reentrant;
 #[cfg(test)]
 mod test_granular_pause;
 
+#[cfg(test)]
+mod test_lifecycle;
+
 // ── Step 2: Add these public contract functions to the ProgramEscrowContract
 //    impl block (alongside the existing admin functions) ──────────────────
 
