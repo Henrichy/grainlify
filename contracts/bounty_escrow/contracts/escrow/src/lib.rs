@@ -5,8 +5,10 @@ mod invariants;
 #[cfg(test)]
 mod test_metadata;
 
+mod test_cross_contract_interface;
 #[cfg(test)]
 mod test_rbac;
+mod traits;
 
 use events::{
     emit_batch_funds_locked, emit_batch_funds_released, emit_bounty_initialized, emit_funds_locked,
@@ -2221,6 +2223,57 @@ impl BountyEscrowContract {
             .ok_or(Error::BountyNotFound)
     }
 }
+
+// ==================== TRAIT IMPLEMENTATIONS ====================
+// Implement the EscrowInterface trait for cross-contract compatibility (Issue #483)
+impl traits::EscrowInterface for BountyEscrowContract {
+    /// Lock funds for a bounty through the trait interface
+    fn lock_funds(
+        env: &Env,
+        depositor: Address,
+        bounty_id: u64,
+        amount: i128,
+        deadline: u64,
+    ) -> Result<(), crate::Error> {
+        BountyEscrowContract::lock_funds(env.clone(), depositor, bounty_id, amount, deadline)
+    }
+
+    /// Release funds to contributor through the trait interface
+    fn release_funds(env: &Env, bounty_id: u64, contributor: Address) -> Result<(), crate::Error> {
+        BountyEscrowContract::release_funds(env.clone(), bounty_id, contributor)
+    }
+
+    /// Refund funds to depositor through the trait interface
+    fn refund(env: &Env, bounty_id: u64) -> Result<(), crate::Error> {
+        BountyEscrowContract::refund(env.clone(), bounty_id)
+    }
+
+    /// Get escrow information through the trait interface
+    fn get_escrow_info(env: &Env, bounty_id: u64) -> Result<crate::Escrow, crate::Error> {
+        BountyEscrowContract::get_escrow_info(env.clone(), bounty_id)
+    }
+
+    /// Get contract balance through the trait interface
+    fn get_balance(env: &Env) -> Result<i128, crate::Error> {
+        BountyEscrowContract::get_balance(env.clone())
+    }
+}
+
+// Implement the UpgradeInterface trait for version compatibility
+impl traits::UpgradeInterface for BountyEscrowContract {
+    /// Get contract version
+    fn get_version(env: &Env) -> u32 {
+        1 // Current version
+    }
+
+    /// Set contract version (admin only)
+    fn set_version(env: &Env, _new_version: u32) -> Result<(), soroban_sdk::String> {
+        // Version management - reserved for future use
+        // Currently, version is hardcoded to 1
+        Ok(())
+    }
+}
+// ==================== END TRAIT IMPLEMENTATIONS ====================
 
 #[cfg(test)]
 mod test;
