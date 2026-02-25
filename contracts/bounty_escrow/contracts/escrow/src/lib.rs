@@ -551,6 +551,27 @@ pub struct ReleaseApproval {
 }
 
 #[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum DisputeReason {
+    QualityIssue = 1,
+    IncompleteWork = 2,
+    DeadlineMissed = 3,
+    ParticipantFraud = 4,
+    Other = 5,
+}
+
+#[contracttype]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum DisputeOutcome {
+    ResolvedByPayout = 1,
+    ResolvedByRefund = 2,
+    CancelledByAdmin = 3,
+    NoActionTaken = 4,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClaimRecord {
     pub bounty_id: u64,
@@ -558,6 +579,7 @@ pub struct ClaimRecord {
     pub amount: i128,
     pub expires_at: u64,
     pub claimed: bool,
+    pub reason: DisputeReason,
 }
 
 #[contracttype]
@@ -1666,7 +1688,12 @@ impl BountyEscrowContract {
     /// Authorize a release as a pending claim instead of immediate transfer.
     /// Admin calls this instead of release_funds when claim period is active.
     /// Beneficiary must call claim() within the window to receive funds.
-    pub fn authorize_claim(env: Env, bounty_id: u64, recipient: Address) -> Result<(), Error> {
+    pub fn authorize_claim(
+        env: Env,
+        bounty_id: u64,
+        recipient: Address,
+        reason: DisputeReason,
+    ) -> Result<(), Error> {
         if Self::check_paused(&env, symbol_short!("release")) {
             return Err(Error::FundsPaused);
         }
@@ -1702,6 +1729,7 @@ impl BountyEscrowContract {
             amount: escrow.amount,
             expires_at: now.saturating_add(claim_window),
             claimed: false,
+            reason: reason.clone(),
         };
 
         env.storage()
@@ -1715,6 +1743,7 @@ impl BountyEscrowContract {
                 recipient,
                 amount: escrow.amount,
                 expires_at: claim.expires_at,
+                reason,
             },
         );
         Ok(())
@@ -1792,6 +1821,7 @@ impl BountyEscrowContract {
                 recipient: claim_recipient,
                 amount: claim_amount,
                 claimed_at: now,
+                outcome: DisputeOutcome::ResolvedByPayout,
             },
         );
 
@@ -1872,13 +1902,18 @@ impl BountyEscrowContract {
                 recipient: claim.recipient,
                 amount: claim.amount,
                 claimed_at: now,
+                outcome: DisputeOutcome::ResolvedByPayout,
             },
         );
         Ok(())
     }
 
     /// Admin can cancel an expired or unwanted pending claim, returning escrow to Locked.
-    pub fn cancel_pending_claim(env: Env, bounty_id: u64) -> Result<(), Error> {
+    pub fn cancel_pending_claim(
+        env: Env,
+        bounty_id: u64,
+        outcome: DisputeOutcome,
+    ) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
         }
@@ -1914,6 +1949,7 @@ impl BountyEscrowContract {
                 amount: claim.amount,
                 cancelled_at: env.ledger().timestamp(),
                 cancelled_by: admin,
+                outcome,
             },
         );
         Ok(())

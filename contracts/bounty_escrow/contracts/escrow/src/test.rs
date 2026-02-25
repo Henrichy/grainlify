@@ -528,7 +528,9 @@ fn test_claim_within_window_transfers_funds() {
 
     setup.escrow.set_claim_window(&500_u64);
 
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(pending.recipient, setup.contributor);
     assert_eq!(pending.amount, amount);
@@ -558,7 +560,9 @@ fn test_claim_after_window_expires_panics() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&200_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let now = setup.env.ledger().timestamp();
     setup.env.ledger().set_timestamp(now + 201);
@@ -578,10 +582,14 @@ fn test_cancel_pending_claim_restores_escrow() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&300_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(pending.amount, amount);
-    setup.escrow.cancel_pending_claim(&bounty_id);
+    setup
+        .escrow
+        .cancel_pending_claim(&bounty_id, &DisputeOutcome::CancelledByAdmin);
     let result = setup.escrow.try_get_pending_claim(&bounty_id);
     assert!(
         result.is_err(),
@@ -597,7 +605,9 @@ fn test_cancel_pending_claim_restores_escrow() {
 #[should_panic(expected = "Error(Contract, #4)")]
 fn test_cancel_pending_claim_not_found() {
     let setup = TestSetup::new();
-    setup.escrow.cancel_pending_claim(&999_u64);
+    setup
+        .escrow
+        .cancel_pending_claim(&999_u64, &DisputeOutcome::CancelledByAdmin);
 }
 
 #[test]
@@ -612,12 +622,18 @@ fn test_cancel_expired_claim_then_authorize_new_one() {
         .escrow
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
     setup.escrow.set_claim_window(&100_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
     let now = setup.env.ledger().timestamp();
     setup.env.ledger().set_timestamp(now + 101);
-    setup.escrow.cancel_pending_claim(&bounty_id);
+    setup
+        .escrow
+        .cancel_pending_claim(&bounty_id, &DisputeOutcome::CancelledByAdmin);
     setup.escrow.set_claim_window(&1_000_u64);
-    setup.escrow.authorize_claim(&bounty_id, &new_contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &new_contributor, &DisputeReason::Other);
 
     let new_pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(new_pending.recipient, new_contributor);
@@ -644,9 +660,13 @@ fn test_cancel_claim_then_use_release_funds_normally() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&300_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
-    setup.escrow.cancel_pending_claim(&bounty_id);
+    setup
+        .escrow
+        .cancel_pending_claim(&bounty_id, &DisputeOutcome::CancelledByAdmin);
 
     setup.escrow.release_funds(&bounty_id, &setup.contributor);
 
@@ -668,7 +688,9 @@ fn test_claim_twice_panics() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&500_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     setup.escrow.claim(&bounty_id);
 
@@ -691,7 +713,9 @@ fn test_claim_does_not_affect_other_bounties() {
         .lock_funds(&setup.depositor, &bounty_b, &amount, &deadline);
 
     setup.escrow.set_claim_window(&500_u64);
-    setup.escrow.authorize_claim(&bounty_a, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_a, &setup.contributor, &DisputeReason::Other);
 
     setup.escrow.claim(&bounty_a);
 
@@ -714,7 +738,9 @@ fn test_authorize_claim_zero_window_expires_immediately() {
         .escrow
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let now = setup.env.ledger().timestamp();
     setup.env.ledger().set_timestamp(now + 1);
@@ -736,7 +762,9 @@ fn test_claim_at_exact_window_boundary_succeeds() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&window);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     setup.env.ledger().set_timestamp(pending.expires_at);
@@ -749,7 +777,9 @@ fn test_claim_at_exact_window_boundary_succeeds() {
 #[should_panic(expected = "Error(Contract, #4)")]
 fn test_authorize_claim_on_nonexistent_bounty() {
     let setup = TestSetup::new();
-    setup.escrow.authorize_claim(&999_u64, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&999_u64, &setup.contributor, &DisputeReason::Other);
 }
 
 #[test]
@@ -764,7 +794,9 @@ fn test_authorize_claim_on_released_bounty() {
         .escrow
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
     setup.escrow.release_funds(&bounty_id, &setup.contributor);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 }
 
 #[test]
@@ -782,7 +814,9 @@ fn test_authorize_claim_on_refunded_bounty() {
 
     setup.env.ledger().set_timestamp(deadline + 1);
     setup.escrow.refund(&bounty_id);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 }
 
 #[test]
@@ -797,7 +831,9 @@ fn test_authorize_claim_default_window_used_when_not_set() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     let auth_time = setup.env.ledger().timestamp();
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(pending.expires_at, auth_time);
@@ -818,7 +854,9 @@ fn test_set_claim_window_success() {
     setup.escrow.set_claim_window(&window);
 
     let auth_time = setup.env.ledger().timestamp();
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(pending.expires_at, auth_time + window);
@@ -843,7 +881,9 @@ fn test_authorize_claim_creates_pending_claim() {
         .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
 
     setup.escrow.set_claim_window(&400_u64);
-    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    setup
+        .escrow
+        .authorize_claim(&bounty_id, &setup.contributor, &DisputeReason::Other);
 
     let pending = setup.escrow.get_pending_claim(&bounty_id);
     assert_eq!(pending.bounty_id, bounty_id);

@@ -1,4 +1,4 @@
-use crate::CapabilityAction;
+use crate::{CapabilityAction, DisputeOutcome, DisputeReason};
 use soroban_sdk::{contracttype, symbol_short, Address, Env};
 
 pub const EVENT_VERSION_V2: u32 = 2;
@@ -146,6 +146,7 @@ pub struct ClaimCreated {
     pub recipient: Address,
     pub amount: i128,
     pub expires_at: u64,
+    pub reason: DisputeReason,
 }
 
 #[contracttype]
@@ -155,6 +156,7 @@ pub struct ClaimExecuted {
     pub recipient: Address,
     pub amount: i128,
     pub claimed_at: u64,
+    pub outcome: DisputeOutcome,
 }
 
 #[contracttype]
@@ -165,6 +167,7 @@ pub struct ClaimCancelled {
     pub amount: i128,
     pub cancelled_at: u64,
     pub cancelled_by: Address,
+    pub outcome: DisputeOutcome,
 }
 
 /// Event emitted when a claim ticket is issued to a bounty winner
