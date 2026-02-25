@@ -401,6 +401,8 @@ pub enum Error {
     CapabilityUsesExhausted = 28,
     CapabilityExceedsAuthority = 29,
     InvalidAssetId = 30,
+    /// Returned when there are no untracked tokens to rescue
+    NoUntrackedBalance = 31,
 }
 
 #[contracttype]
@@ -453,6 +455,7 @@ pub enum DataKey {
     AmountPolicy, // Option<(i128, i128)> — (min_amount, max_amount) set by set_amount_policy
     CapabilityNonce, // monotonically increasing capability id
     Capability(u64), // capability_id -> Capability
+    TreasuryAddress, // Address to receive rescued tokens
 }
 
 #[contracttype]
@@ -3292,6 +3295,205 @@ impl BountyEscrowContract {
             .get(&DataKey::Metadata(bounty_id))
             .ok_or(Error::BountyNotFound)
     }
+
+    /// Set the treasury address for rescued tokens (admin only).
+    ///
+    /// The treasury address is where accidentally sent tokens (not tracked in any escrow)
+    /// will be sent when rescue_untracked_tokens is called.
+    ///
+    /// # Arguments
+    /// * `treasury` - Address to receive rescued tokens
+    ///
+    /// # Returns
+    /// * `Ok(())` - Treasury address set successfully
+    /// * `Err(Error::NotInitialized)` - Contract not initialized
+    /// * `Err(Error::Unauthorized)` - Caller is not admin
+    pub fn set_treasury_address(env: Env, treasury: Address) -> Result<(), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryAddress, &treasury);
+
+        events::emit_treasury_updated(
+            &env,
+            events::TreasuryUpdated {
+                treasury: treasury.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Get the current treasury address.
+    ///
+    /// # Returns
+    /// * `Some(Address)` - Treasury address if set
+    /// * `None` - Treasury address not configured
+    pub fn get_treasury_address(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::TreasuryAddress)
+    }
+
+    /// Calculate the total tracked balance across all escrows.
+    ///
+    /// This sums up the `remaining_amount` of all escrows in Locked or PartiallyRefunded status.
+    /// Released and Refunded escrows have remaining_amount = 0 and don't contribute.
+    ///
+    /// # Returns
+    /// Total amount of tokens tracked in active escrows
+    fn calculate_tracked_balance(env: &Env) -> i128 {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(env));
+
+        let mut tracked_total: i128 = 0;
+
+        for i in 0..index.len() {
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                // Only count remaining amounts from active escrows
+                if escrow.status == EscrowStatus::Locked
+                    || escrow.status == EscrowStatus::PartiallyRefunded
+                {
+                    tracked_total = tracked_total.saturating_add(escrow.remaining_amount);
+                }
+            }
+        }
+
+        tracked_total
+    }
+
+    /// Rescue tokens that were accidentally sent directly to the contract.
+    ///
+    /// This function allows the admin to recover tokens that are not associated with any escrow.
+    /// It computes the "untracked balance" as:
+    ///   untracked_balance = contract_token_balance - sum(escrow.remaining_amount for all active escrows)
+    ///
+    /// Only tokens in excess of tracked escrow balances can be rescued. This ensures that
+    /// escrow-managed funds are never touched.
+    ///
+    /// # Safety Guarantees
+    /// - Only untracked tokens (not part of any escrow) can be rescued
+    /// - Escrow balances are protected and cannot be withdrawn via this function
+    /// - Requires admin authorization
+    /// - Requires treasury address to be configured
+    /// - Emits event for full audit trail
+    ///
+    /// # Arguments
+    /// * `amount` - Amount of untracked tokens to rescue (must be <= untracked balance)
+    ///
+    /// # Returns
+    /// * `Ok(())` - Tokens rescued successfully
+    /// * `Err(Error::NotInitialized)` - Contract not initialized
+    /// * `Err(Error::Unauthorized)` - Caller is not admin
+    /// * `Err(Error::FeeRecipientNotSet)` - Treasury address not configured
+    /// * `Err(Error::InvalidAmount)` - Amount is zero, negative, or exceeds untracked balance
+    /// * `Err(Error::NoUntrackedBalance)` - No untracked tokens available to rescue
+    ///
+    /// # Reentrancy
+    /// Protected by the shared reentrancy guard. The token transfer is the
+    /// last operation (checks-effects-interactions).
+    pub fn rescue_untracked_tokens(env: Env, amount: i128) -> Result<(), Error> {
+        // GUARD: acquire reentrancy lock
+        reentrancy_guard::acquire(&env);
+
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+
+        // Get treasury address
+        let treasury: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::TreasuryAddress)
+            .ok_or(Error::FeeRecipientNotSet)?;
+
+        // Validate amount
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Get contract's actual token balance
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_addr);
+        let contract_address = env.current_contract_address();
+        let contract_balance = token_client.balance(&contract_address);
+
+        // Calculate tracked balance (sum of all active escrow remaining_amounts)
+        let tracked_balance = Self::calculate_tracked_balance(&env);
+
+        // Calculate untracked balance
+        let untracked_balance = contract_balance.saturating_sub(tracked_balance);
+
+        // Ensure there are untracked tokens
+        if untracked_balance <= 0 {
+            return Err(Error::NoUntrackedBalance);
+        }
+
+        // Ensure requested amount doesn't exceed untracked balance
+        if amount > untracked_balance {
+            return Err(Error::InvalidAmount);
+        }
+
+        // INTERACTION: external token transfer is last (CEI pattern)
+        token_client.transfer(&contract_address, &treasury, &amount);
+
+        // Emit event for audit trail
+        events::emit_tokens_rescued(
+            &env,
+            events::TokensRescued {
+                admin: admin.clone(),
+                treasury: treasury.clone(),
+                amount,
+                contract_balance_before: contract_balance,
+                tracked_balance,
+                untracked_balance,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+
+        // GUARD: release reentrancy lock
+        reentrancy_guard::release(&env);
+        Ok(())
+    }
+
+    /// View function to check untracked token balance.
+    ///
+    /// Returns the amount of tokens in the contract that are not associated with any escrow.
+    /// This is useful for checking if there are accidentally sent tokens that can be rescued.
+    ///
+    /// # Returns
+    /// Tuple of (contract_balance, tracked_balance, untracked_balance)
+    pub fn get_untracked_balance(env: Env) -> Result<(i128, i128, i128), Error> {
+        if !env.storage().instance().has(&DataKey::Token) {
+            return Err(Error::NotInitialized);
+        }
+
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::Client::new(&env, &token_addr);
+        let contract_address = env.current_contract_address();
+        let contract_balance = token_client.balance(&contract_address);
+
+        let tracked_balance = Self::calculate_tracked_balance(&env);
+        let untracked_balance = contract_balance.saturating_sub(tracked_balance);
+
+        Ok((contract_balance, tracked_balance, untracked_balance))
+    }
 }
 
 impl traits::EscrowInterface for BountyEscrowContract {
@@ -3380,6 +3582,8 @@ mod test_partial_payout_rounding;
 mod test_pause;
 #[cfg(test)]
 mod test_reentrancy_guard;
+#[cfg(test)]
+mod test_token_rescue;
 #[cfg(test)]
 mod escrow_status_transition_tests {
     use super::*;

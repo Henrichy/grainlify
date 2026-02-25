@@ -235,3 +235,32 @@ pub fn emit_capability_revoked(env: &Env, event: CapabilityRevoked) {
     let topics = (symbol_short!("cap_rev"), event.capability_id);
     env.events().publish(topics, event);
 }
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TreasuryUpdated {
+    pub treasury: Address,
+    pub timestamp: u64,
+}
+
+pub fn emit_treasury_updated(env: &Env, event: TreasuryUpdated) {
+    let topics = (symbol_short!("trs_upd"),);
+    env.events().publish(topics, event.clone());
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TokensRescued {
+    pub admin: Address,
+    pub treasury: Address,
+    pub amount: i128,
+    pub contract_balance_before: i128,
+    pub tracked_balance: i128,
+    pub untracked_balance: i128,
+    pub timestamp: u64,
+}
+
+pub fn emit_tokens_rescued(env: &Env, event: TokensRescued) {
+    let topics = (symbol_short!("rescue"),);
+    env.events().publish(topics, event.clone());
+}
