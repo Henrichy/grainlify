@@ -166,6 +166,39 @@ pub struct ClaimCancelled {
     pub cancelled_by: Address,
 }
 
+/// Event emitted when a claim ticket is issued to a bounty winner
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TicketIssued {
+    pub ticket_id: u64,
+    pub bounty_id: u64,
+    pub beneficiary: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+    pub issued_at: u64,
+}
+
+pub fn emit_ticket_issued(env: &Env, event: TicketIssued) {
+    let topics = (symbol_short!("tkt_iss"), event.ticket_id);
+    env.events().publish(topics, event.clone());
+}
+
+/// Event emitted when a beneficiary claims their reward using a ticket
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TicketClaimed {
+    pub ticket_id: u64,
+    pub bounty_id: u64,
+    pub beneficiary: Address,
+    pub amount: i128,
+    pub claimed_at: u64,
+}
+
+pub fn emit_ticket_claimed(env: &Env, event: TicketClaimed) {
+    let topics = (symbol_short!("tkt_clm"), event.ticket_id);
+    env.events().publish(topics, event.clone());
+}
+
 pub fn emit_pause_state_changed(env: &Env, event: crate::PauseStateChanged) {
     let topics = (symbol_short!("pause"), event.operation.clone());
     env.events().publish(topics, event);
