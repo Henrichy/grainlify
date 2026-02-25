@@ -161,6 +161,18 @@ use multisig::{MultiSig, MultiSigConfig};
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec, String,
 };
+pub mod asset;
+pub mod nonce;
+
+mod governance;
+mod multisig;
+pub use governance::{
+    Error as GovError, GovernanceConfig, Proposal, ProposalStatus, Vote, VoteType, VotingScheme,
+};
+use multisig::MultiSig;
+#[cfg(feature = "contract")]
+use soroban_sdk::{contract, contractimpl};
+use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, String, Symbol, Vec};
 
 // ==================== MONITORING MODULE ====================
 mod monitoring {
@@ -356,6 +368,7 @@ mod monitoring {
 // Contract Definition
 // ============================================================================
 
+#[cfg(feature = "contract")]
 #[contract]
 pub struct GrainlifyContract;
 
@@ -420,6 +433,7 @@ enum DataKey {
 ///
 /// # Usage
 /// Set during initialization and can be updated via `set_version()`.
+#[cfg(feature = "contract")]
 const VERSION: u32 = 2;
 const CONFIG_SNAPSHOT_LIMIT: u32 = 20;
 
@@ -524,6 +538,7 @@ pub struct MigrationEvent {
     ///   --admin GADMIN_ADDRESS
     /// ```
  
+#[cfg(feature = "contract")]
 #[contractimpl]
 impl GrainlifyContract {
     /// Initializes the contract with multisig configuration.
